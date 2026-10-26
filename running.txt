@@ -47,6 +47,22 @@ Start-Sleep -Seconds 2
 Invoke-WebRequest 'http://localhost:8081/healthz' -UseBasicParsing
 Start-Process 'http://localhost:8080'
 
+VERTEX AI / CLOUD SHELL SYNCHRONIZED RUNNER
+-------------------------------------------
+
+For the pull -> test -> run -> report -> push workflow, use Cloud Shell:
+
+```bash
+cd ~/VOIS_TransformSQL_Engine
+git pull origin main
+chmod +x vertex_run.sh
+INPUT_XLSX=/path/to/your/workbook.xlsx ./vertex_run.sh
+```
+
+The runner automatically pulls the latest code first, installs dependencies, checks backend and frontend syntax, parses the workbook, starts both services, checks Vertex/Google ADC readiness, writes a non-secret Markdown report under `run-reports/`, commits the report, and pushes it to `origin/main`. Exit code `0` means no failures; exit code `1` means inspect `run-reports/latest.md`, `backend.log`, and `frontend.log`.
+
+After a fix is pushed from this repository, run the same command again in Vertex. It pulls the fix before testing. The runner refuses to overwrite uncommitted local changes.
+
 LOCAL LOGIN
 -----------
 
