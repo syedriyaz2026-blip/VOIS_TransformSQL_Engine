@@ -881,6 +881,13 @@ class Handler(SimpleHTTPRequestHandler):
         if not upload or not upload.get("filename"):
             self.send_error(400, "file is required")
             return
+        filename = str(upload.get("filename") or "")
+        if not filename.lower().endswith(".xlsx"):
+            self.send_json({"error": "Only .xlsx Excel workbooks are supported", "code": "UNSUPPORTED_WORKBOOK_TYPE"}, 415)
+            return
+        if not upload.get("value"):
+            self.send_json({"error": "The uploaded workbook is empty", "code": "EMPTY_WORKBOOK"}, 400)
+            return
         temp_handle = tempfile.NamedTemporaryFile(dir=ROOT, suffix=".xlsx", delete=False)
         temp = Path(temp_handle.name)
         with temp_handle:
@@ -888,6 +895,9 @@ class Handler(SimpleHTTPRequestHandler):
         dialect = (form.get("dialect") or {}).get("value", b"bigquery").decode("utf-8", "ignore") or "bigquery"
         try:
             payload = build_result(temp, dialect)
+        except Exception as exc:
+            self.send_json({"error": f"Excel workbook could not be read: {exc}", "code": "INVALID_WORKBOOK"}, 400)
+            return
         finally:
             temp.unlink(missing_ok=True)
         self.send_json(payload)
