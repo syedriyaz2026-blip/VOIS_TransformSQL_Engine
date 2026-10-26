@@ -28,25 +28,25 @@ HEADERS = [
     "target column name", "target column data type",
 ]
 ALIASES = {
-    "source table name": ["source table name", "src table name", "source table"],
-    "source column name": ["source column name", "src column name", "source attribute", "source column"],
-    "source column data type": ["source column data type", "src column data type", "source data type"],
-    "transformation type": ["transformation type", "transform type", "nature groupby aggregate over dim"],
-    "transformation rule": ["transformation rule", "transform rule", "transformation logic"],
-    "target table name": ["target table name", "target_table_name", "target table"],
-    "target column name": ["target column name", "target attribute", "target column"],
-    "target column data type": ["target column data type", "target attribute data type", "target data type"],
+    "source table name": ["source table name", "src table name", "source table", "input table", "input source table", "source entity"],
+    "source column name": ["source column name", "src column name", "source attribute", "source column", "source field", "source field name", "input column", "input attribute", "input field"],
+    "source column data type": ["source column data type", "src column data type", "source data type", "source datatype", "input data type", "input datatype"],
+    "transformation type": ["transformation type", "transform type", "transformation category", "mapping type", "rule type", "nature", "nature groupby aggregate over dim"],
+    "transformation rule": ["transformation rule", "transform rule", "transformation logic", "business rule", "mapping rule", "derivation logic", "expression", "transformation expression"],
+    "target table name": ["target table name", "target_table_name", "target table", "output table", "destination table", "target entity", "output entity"],
+    "target column name": ["target column name", "target attribute", "target column", "output column", "destination column", "target field", "output field", "output attribute"],
+    "target column data type": ["target column data type", "target attribute data type", "target data type", "target datatype", "output data type", "destination data type"],
 }
 
-CONTRACT_HEADERS = {
-    "source table": "source table name",
-    "source column": "source column name",
-    "source data type": "source column data type",
-    "target table": "target table name",
-    "target column": "target column name",
-    "target data type": "target column data type",
-    "transformation logic": "transformation rule",
-    "nature (groupby/ aggregate over dim)": "transformation type",
+CONTRACT_FIELD_ALIASES = {
+    "source table name": ["source table", "source table name", "input table", "input source table", "source entity"],
+    "source column name": ["source column", "source column name", "source field", "source attribute", "input column", "input field"],
+    "source column data type": ["source data type", "source datatype", "input data type", "input datatype"],
+    "target table name": ["target table", "target table name", "output table", "destination table", "target entity", "output entity"],
+    "target column name": ["target column", "target column name", "output column", "destination column", "target field", "output field", "target attribute"],
+    "target column data type": ["target data type", "target datatype", "output data type", "destination data type"],
+    "transformation rule": ["transformation logic", "transformation rule", "business rule", "mapping rule", "derivation logic", "expression"],
+    "transformation type": ["nature groupby aggregate over dim", "transformation type", "transform type", "transformation category", "mapping type", "nature"],
 }
 
 
@@ -584,8 +584,8 @@ def find_mapping(rows):
     for index, row in enumerate(rows[:80]):
         normalized = [header_norm(value) for value in row]
         standard_score = sum(any(header_norm(alias) in normalized for alias in ALIASES[key]) for key in HEADERS)
-        contract_score = sum(header_norm(header) in normalized for header in CONTRACT_HEADERS)
-        if contract_score >= 6:
+        contract_score = sum(any(header_norm(alias) in normalized for alias in aliases) for aliases in CONTRACT_FIELD_ALIASES.values())
+        if contract_score >= 5:
             score = contract_score + 100
             candidate = (score, index, normalized, "contract")
         elif standard_score >= 5:
@@ -610,11 +610,15 @@ def scan_workbook(path):
         records = []
         for row in rows[header_row + 1:]:
             row_headers = {header_norm(value) for value in row if value not in (None, "")}
-            known_headers = {header_norm(header) for header in HEADERS} | {header_norm(header) for header in CONTRACT_HEADERS} | {header_norm(alias) for values in ALIASES.values() for alias in values}
+            known_headers = {header_norm(header) for header in HEADERS} | {header_norm(alias) for aliases in CONTRACT_FIELD_ALIASES.values() for alias in aliases} | {header_norm(alias) for values in ALIASES.values() for alias in values}
             if len(row_headers.intersection(known_headers)) >= 3:
                 continue
             if layout == "contract":
-                positions = {key: normalized.index(header_norm(header_name)) for header_name, key in CONTRACT_HEADERS.items() if header_norm(header_name) in normalized}
+                positions = {}
+                for key, aliases in CONTRACT_FIELD_ALIASES.items():
+                    alias = next((alias for alias in aliases if header_norm(alias) in normalized), None)
+                    if alias:
+                        positions[key] = normalized.index(header_norm(alias))
                 data_type_positions = [i for i, value in enumerate(normalized) if value == header_norm("data type")]
                 # This workbook family uses DATA TYPE twice: once after SOURCE COLUMN
                 # and once after TARGET COLUMN. Resolve both by their fixed relative
