@@ -8,6 +8,7 @@ import tempfile
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 import openpyxl
 
@@ -773,7 +774,9 @@ class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         settings = load_settings()
         origin = self.headers.get("Origin")
-        if origin and origin in settings.cors_allowed_origins:
+        origin_host = urlparse(origin).hostname if origin else None
+        cloudshell_origin = bool(origin_host and (origin_host.endswith(".cloudshell.dev") or origin_host.endswith(".cloudshell.googleusercontent.com")))
+        if origin and (origin in settings.cors_allowed_origins or cloudshell_origin):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         elif not origin and settings.env == "local":

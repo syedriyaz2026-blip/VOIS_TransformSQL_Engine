@@ -1,6 +1,7 @@
 const state={sheets:[],rowQueries:[],selectedRow:null,rowFilter:'All',workbook:null,summary:null,runtimeConfig:{demo_login_enabled:true}};
 const $=id=>document.getElementById(id);
-const API_BASE=window.TRANSFORMSQL_API_BASE||'http://localhost:8081';
+function runtimeApiBase(){if(window.TRANSFORMSQL_API_BASE)return window.TRANSFORMSQL_API_BASE;const host=window.location.hostname;if(host==='localhost'||host==='127.0.0.1')return `${window.location.protocol}//${host}:8081`;if(/^8080-/.test(host))return `${window.location.protocol}//${host.replace(/^8080-/,'8081-')}`;return `${window.location.protocol}//${window.location.host}`;}
+const API_BASE=runtimeApiBase();
 const headers=['source table name','source column name','source column data type','transformation type','transformation rule','target table name','target column name','target column data type'];
 const aliases={'source table name':['source table name','src table name','source table'],'source column name':['source column name','src column name','source attribute'],'source column data type':['source column data type','src column data type'],'transformation type':['transformation type','transform type'],'transformation rule':['transformation rule','transform rule'],'target table name':['target table name','target_table_name','target table'],'target column name':['target column name','target attribute'],'target column data type':['target column data type','target attribute data type']};
 const norm=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
