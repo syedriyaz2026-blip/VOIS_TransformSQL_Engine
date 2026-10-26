@@ -336,7 +336,8 @@ diff AS (SELECT COALESCE(g.value, t.value) AS value, COALESCE(g.value_count, 0) 
 
 
 def norm(value):
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+    # Preserve numeric zero; Excel rules commonly use 0 as a real literal.
+    return re.sub(r"\s+", " ", str(value if value is not None else "").strip().lower())
 
 
 def header_norm(value):
@@ -385,7 +386,8 @@ def row_table_context(row):
 
 def classify(row):
     kind, rule = norm(row.get("transformation type")), norm(row.get("transformation rule"))
-    source = str(row.get("source column name") or "").strip()
+    source_value = row.get("source column name")
+    source = str(source_value if source_value is not None else "").strip()
     if "direct" in kind or rule in {"direct", "direct mapping"} or (not rule and (source or "derived" not in kind)):
         return "Direct"
     if "join" in kind or "left join" in rule or "inner join" in rule:
@@ -396,9 +398,12 @@ def classify(row):
 
 
 def expression(row, dialect):
-    source = str(row.get("source column name") or "").strip()
-    rule = str(row.get("transformation rule") or "").strip()
-    target_column = str(row.get("target column name") or "").strip()
+    source_value = row.get("source column name")
+    rule_value = row.get("transformation rule")
+    target_value = row.get("target column name")
+    source = str(source_value if source_value is not None else "").strip()
+    rule = str(rule_value if rule_value is not None else "").strip()
+    target_column = str(target_value if target_value is not None else "").strip()
     if target_column:
         rule = re.sub(rf"\s+AS\s+{re.escape(target_column)}\s*$", "", rule, flags=re.I).strip()
     kind = classify(row)
@@ -514,11 +519,28 @@ def expression(row, dialect):
     cleaned = re.sub(r"\b1\.\s*\(", "1 * (", cleaned)
     cleaned = re.sub(r"\bto_date\s*\(\s*([^,]+?)\s*\|\|\s*'01'\s*,\s*'YYYYMMDD'\s*\)", r"PARSE_DATE('%Y%m%d', CONCAT(CAST(\1 AS STRING), '01'))", cleaned, flags=re.I)
     cleaned = re.sub(r"\bto_date\s*\(\s*([^,]+?)\s*,\s*'DD/MM/YYYY'\s*\)", r"PARSE_DATE('%d/%m/%Y', CAST(\1 AS STRING))", cleaned, flags=re.I)
+    # A contract workbook family contains a truncated final term such as
+    # ``LTRIM(RTRIM(COLUMN,0) AS INT64)``.  In the surrounding expression the
+    # intended form is ``IFNULL(LTRIM(RTRIM(COLUMN)),0) AS INT64``.
+    cleaned = re.sub(
+        r"LTRIM\(\s*RTRIM\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*0\s*\)\s+AS\s+INT64\s*\)",
+        r"LTRIM(RTRIM(\1)),0) AS INT64)",
+        cleaned,
+        flags=re.I,
+    )
     cleaned = translate_legacy_dates(cleaned)
     formula_only = re.split(r"\s+where\s+", cleaned, maxsplit=1, flags=re.I)[0].strip()
     if dialect == "bigquery" and re.match(r"^(?:PARSE_DATE|PARSE_TIMESTAMP|CAST|SAFE_CAST|IFNULL|COALESCE|SUBSTR|CONCAT|CEIL|FLOOR|ROUND)\s*\(", cleaned, re.I) and cleaned.count("(") == cleaned.count(")"):
         return cleaned
     if re.fullmatch(r"[A-Za-z0-9_().\s+*/%-]+", formula_only) and re.search(r"[+*/%-]", formula_only) and not re.search(r"\b(?:select|from|join|then|else)\b", formula_only, re.I):
+        return formula_only
+    if (
+        dialect == "bigquery"
+        and re.search(r"[+*/%-]", formula_only)
+        and formula_only.count("(") == formula_only.count(")")
+        and re.fullmatch(r"[A-Za-z0-9_.,'\"()\s+*/%-]+", formula_only)
+        and not re.search(r"\b(?:select|from|join|then|else|where)\b", formula_only, re.I)
+    ):
         return formula_only
     comma_if = re.match(r"^if\s*\(?(.*?)\s*,\s*(.*?)\s*,\s*(?:else\s+)?(.*?)\)?$", cleaned, re.I)
     if comma_if and not re.search(r"\b(?:select|join|group by)\b", cleaned, re.I):
