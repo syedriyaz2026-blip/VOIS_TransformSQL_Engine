@@ -634,6 +634,11 @@ def pretty_case(value):
     text = re.sub(r"\s+", " ", value.replace("_x000D_", " ")).strip()
     text = re.sub(r"\bupper\s*\(", "UPPER(", text, flags=re.I)
     text = re.sub(r"\blower\s*\(", "LOWER(", text, flags=re.I)
+    text = re.sub(r"^CASE\s+WHEN\s+", "CASE\n    WHEN ", text, flags=re.I)
+    text = re.sub(r"\s+WHEN\s+", "\n    WHEN ", text, flags=re.I)
+    text = re.sub(r"\s+THEN\s+", "\n    THEN ", text, flags=re.I)
+    text = re.sub(r"\s+ELSE\s+", "\n    ELSE ", text, flags=re.I)
+    text = re.sub(r"\s+END\s*$", "\nEND", text, flags=re.I)
     return text
 
 
