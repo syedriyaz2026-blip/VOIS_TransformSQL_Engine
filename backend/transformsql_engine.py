@@ -40,6 +40,7 @@ ALIASES = {
 
 OPTIONAL_ALIASES = {
     "source directory path": ["source directory path", "source directory", "source path", "source file path", "source folder"],
+    "source dataset": ["source dataset", "input dataset", "source schema"],
     "source datatype changed": ["source datatype changed", "source data type changed", "datatype changed", "data type changed"],
     "target dataset": ["target dataset", "destination dataset", "output dataset"],
     "comment": ["comment", "comments", "note", "notes", "additional comment"],
@@ -259,7 +260,7 @@ def strip_sql_comments(sql):
     return "\n".join(line for line in str(sql or "").splitlines() if not line.strip().startswith("--")).strip().rstrip(";").strip()
 
 
-def compare_bigquery(generated_sql, target_table, target_column):
+def compare_bigquery(generated_sql, target_table, target_column, target_dataset=""):
     """Compare generated and target-column values as multisets, independent of row order."""
     load_env_file()
     generated_sql = strip_sql_comments(generated_sql)
@@ -273,14 +274,15 @@ def compare_bigquery(generated_sql, target_table, target_column):
         from google.cloud import bigquery
     except ImportError as exc:
         raise RuntimeError("BigQuery support is not installed. Run: pip install -r requirements.txt") from exc
-    project = os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+    project = resolve_bigquery_project() or ""
+    target_dataset = str(target_dataset or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
     location = os.getenv("BIGQUERY_LOCATION") or None
     max_billed = os.getenv("BIGQUERY_MAX_BYTES_BILLED", "") or None
     client = bigquery_client()
     config = bigquery.QueryJobConfig(use_legacy_sql=False)
     if max_billed:
         config.maximum_bytes_billed = int(max_billed)
-    target_ref = qselect(str(target_table).strip().strip("`"), "bigquery")
+    target_ref = qualified_table(target_table, target_dataset, project, "bigquery")
     target_col = qselect(str(target_column).strip().strip("`"), "bigquery")
     generated = f"SELECT {qselect(str(target_column).strip(), 'bigquery')} AS value FROM ({generated_sql}) AS generated_result"
     target = f"SELECT {target_col} AS value FROM {target_ref}"
@@ -329,6 +331,26 @@ def qselect(value, dialect):
     if dialect == "bigquery" and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
         return value
     return qident(value, dialect)
+
+
+def qualified_table(table, dataset="", project="", dialect="bigquery"):
+    """Return a safe project.dataset.table reference without duplicating qualifiers."""
+    value = str(table or "").strip().strip("`")
+    if dialect != "bigquery" or not value:
+        return qselect(value, dialect)
+    parts = [part.strip().strip("`") for part in value.split(".") if part.strip()]
+    if len(parts) >= 3:
+        return qident(".".join(parts), dialect)
+    prefix = [str(project or "").strip(), str(dataset or "").strip()]
+    qualified = [part for part in prefix if part] + parts
+    return qident(".".join(qualified), dialect)
+
+
+def row_table_context(row):
+    project = resolve_bigquery_project() or ""
+    target_dataset = str(row.get("target dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
+    source_dataset = str(row.get("source dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or target_dataset).strip()
+    return project, source_dataset, target_dataset
 
 
 def classify(row):
@@ -534,6 +556,7 @@ def join_from_clause(row, dialect):
     """Build a conservative LEFT JOIN clause for common mapping-sheet lookup text."""
     target = str(row.get("target table name") or "target_table").strip()
     source_table = str(row.get("source table name") or "").strip()
+    project, source_dataset, target_dataset = row_table_context(row)
     rule = str(row.get("transformation rule") or "")
     lookup = ""
     match = re.search(r"(?:left\s+join|inner\s+join|join)\s+([A-Za-z0-9_.`*\-]+)", rule, re.I)
@@ -543,7 +566,7 @@ def join_from_clause(row, dialect):
     if not lookup and source_table and source_table.lower() not in {"source_table", "aa_base"}:
         lookup = source_table.split(",")[0].strip().strip("`")
     if not lookup:
-        return f"{qselect(target, dialect)} AS T"
+        return f"{qualified_table(target, target_dataset, project, dialect)} AS T"
     aliases = {"DAT_MONTH_ID", "SUB_SUBSCRIPTION_CD", "CUS_CUSTOMER_CD", "PRICEPLAN_DESC", "CUS_CUSTOMER_CD_HASH_GRP"}
     pairs = re.findall(r"\bT\.?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*T1\.?\s*([A-Za-z_][A-Za-z0-9_]*)", rule, re.I)
     keys = [left for left, right in pairs if left.upper() == right.upper()]
@@ -553,12 +576,13 @@ def join_from_clause(row, dialect):
     if not keys:
         keys = ["PRICEPLAN_DESC"] if "PRICEPLAN" in rule.upper() else ["DAT_MONTH_ID", "SUB_SUBSCRIPTION_CD"]
     condition = " AND ".join(f"T.{key} = L.{key}" for key in dict.fromkeys(keys))
-    return f"{qselect(target, dialect)} AS T\nLEFT JOIN {qident(lookup, dialect)} AS L\n  ON {condition}"
+    return f"{qualified_table(target, target_dataset, project, dialect)} AS T\nLEFT JOIN {qualified_table(lookup, source_dataset, project, dialect)} AS L\n  ON {condition}"
 
 
 def previous_month_from_clause(row, dialect):
     target = str(row.get("target table name") or "target_table").strip()
-    table = qselect(target, dialect)
+    project, _, target_dataset = row_table_context(row)
+    table = qualified_table(target, target_dataset, project, dialect)
     return f"{table} AS curr\nLEFT JOIN {table} AS prev\n  ON curr.sub_subscription_cd_prev = prev.sub_subscription_cd"
 
 
@@ -697,12 +721,15 @@ def generate_queries(sheets, dialect="bigquery"):
             if not rows:
                 continue
             source = next((str(row.get("source table name")).strip() for row in rows if row.get("source table name")), "source_table")
+            project, source_dataset, target_dataset = row_table_context(rows[0])
+            source_ref = qualified_table(source, source_dataset, project, dialect)
+            target_ref = qualified_table(target, target_dataset, project, dialect)
             columns = ",\n".join(f"  {qident(row['target column name'], dialect)}" for row in rows)
             expressions = ",\n".join(
                 f"  {expression(row, dialect)} AS {qident(row['target column name'], dialect)} -- {classify(row)}"
                 for row in rows
             )
-            sql.extend([f"INSERT INTO {qident(target, dialect)} (", columns, ")", "SELECT", expressions, f"FROM {qident(source, dialect)};", ""])
+            sql.extend([f"INSERT INTO {target_ref} (", columns, ")", "SELECT", expressions, f"FROM {source_ref};", ""])
         output.append({"sheet": sheet["name"], "rows": sheet["rows"], "sql": "\n".join(sql).strip()})
     return output
 
@@ -721,7 +748,10 @@ def generate_row_queries(sheets, dialect="bigquery"):
                 continue
             source_table = str(row.get("source table name") or "source_table").strip()
             kind = classify(row)
-            query_from = target_table if kind != "Direct" else source_table
+            project, source_dataset, target_dataset = row_table_context(row)
+            source_ref = qualified_table(source_table, source_dataset, project, dialect)
+            target_ref = qualified_table(target_table, target_dataset, project, dialect)
+            query_from = target_ref if kind != "Direct" else source_ref
             expr = expression(row, dialect)
             status = "READY" if "TODO:" not in expr else "REVIEW"
             row_number += 1
@@ -733,7 +763,7 @@ def generate_row_queries(sheets, dialect="bigquery"):
             if is_previous_join:
                 from_clause = previous_month_from_clause(row, dialect)
             else:
-                from_clause = join_from_clause(row, dialect) if kind == "Join / lookup" and "TODO:" not in expr else qselect(query_from, dialect)
+                from_clause = join_from_clause(row, dialect) if kind == "Join / lookup" and "TODO:" not in expr else query_from
             sql = "\n".join([
                 "-- BigQuery Standard SQL",
                 f"-- Sheet: {sheet['name']} | Mapping row: {row_number}",
@@ -750,8 +780,9 @@ def generate_row_queries(sheets, dialect="bigquery"):
                            "target_table": target_table, "target_column": target_column,
                            "transformation_type": kind, "rule": str(row.get("transformation rule") or ""),
                            "source_directory_path": str(row.get("source directory path") or ""),
+                           "source_dataset": source_dataset,
                            "source_datatype_changed": str(row.get("source datatype changed") or ""),
-                           "target_dataset": str(row.get("target dataset") or ""),
+                           "target_dataset": target_dataset,
                            "comment": str(row.get("comment") or ""),
                            "query_from": query_from, "status": status, "validation_errors": validation_errors,
                            "expression": expr, "sql": sql})
@@ -865,7 +896,7 @@ class Handler(SimpleHTTPRequestHandler):
                     result = run_bigquery(str(request.get("sql") or ""))
                     result["correlation_id"] = request_id
                 elif self.path == "/api/v1/compare-bigquery":
-                    result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"))
+                    result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"))
                     result["correlation_id"] = request_id
                 else:
                     self.send_json(error_payload(TransformSQLError("INVALID_REQUEST", "Unknown v1 endpoint", 404), request_id), 404)
@@ -891,7 +922,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 request = json.loads(self.rfile.read(length).decode("utf-8"))
-                result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"))
+                result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"))
                 self.send_json(result)
             except Exception as exc:
                 self.send_json({"error": str(exc)}, 400 if isinstance(exc, ValueError) else 503)

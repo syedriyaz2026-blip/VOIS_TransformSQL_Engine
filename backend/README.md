@@ -33,6 +33,8 @@ In Vertex AI / Workbench, copy `.env.example` if needed and leave the credential
 
 After generating a row query in the UI, click **Run in BigQuery**. The result table is returned to the same interface. The backend limits displayed rows using `BIGQUERY_MAX_ROWS` and can enforce a cost ceiling with `BIGQUERY_MAX_BYTES_BILLED`.
 
+Table qualification is resolved per mapping row. `SOURCE DATASET` is applied to source tables and `TARGET DATASET` is applied to target tables; the active Vertex/Google project is discovered from Application Default Credentials. The generated references therefore have the form `` `project.dataset.table` ``. If the workbook has no dataset columns, set `BIGQUERY_DATASET`, `BIGQUERY_SOURCE_DATASET`, or `BIGQUERY_TARGET_DATASET` in `.env`.
+
 After a successful run, the UI automatically compares the generated result with the selected row's target table and target column. The comparison SQL is generated and executed privately by the backend and is never displayed or returned to the browser. The dashboard reports `PASS` or `FAIL`, row counts, mismatched values, and deviations.
 
 The frontend reads `/api/config` at startup. Demo credentials are enabled only when `ENV=local`; staging and production must set `DEMO_LOGIN_ENABLED=false` and use a real authentication layer before external deployment. The Settings page is informational in Vertex mode: it reports the active runtime authentication and project, and provides a connection test without asking users to configure credentials.

@@ -58,11 +58,13 @@ VERTEX RUNTIME AUTHENTICATION
 
 Leave GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS unset in Vertex mode.
 The backend discovers the active project and credentials from the Vertex runtime.
+For every mapping row, SOURCE DATASET and TARGET DATASET from Excel are used when present.
+If a workbook has no dataset columns, optionally set BIGQUERY_DATASET, or the more specific
+BIGQUERY_SOURCE_DATASET and BIGQUERY_TARGET_DATASET, in backend/.env.
 Optional runtime controls such as BIGQUERY_LOCATION and BIGQUERY_MAX_ROWS may remain in .env.
 
 All environment variables are loaded automatically from backend/.env when the backend starts.
-The VOIS Settings page is intentionally separate and shows only BigQuery connection settings:
-project, location, and credential path, plus save, reload, and connection test.
+The VOIS Settings page is intentionally separate and shows the runtime BigQuery connection.
 
 STOP COMMANDS
 -------------
