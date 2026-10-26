@@ -903,7 +903,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/api/config":
             settings = load_settings()
-            self.send_json({"env": settings.env, "demo_login_enabled": settings.demo_login_enabled})
+            load_env_file()
+            self.send_json({"env": settings.env, "demo_login_enabled": settings.demo_login_enabled,
+                            "source_project": os.getenv("BIGQUERY_SOURCE_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or "",
+                            "source_dataset": os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or "",
+                            "target_project": os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or "",
+                            "target_dataset": os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or ""})
             return
         if self.path == "/api/settings":
             self.send_json(public_settings())
