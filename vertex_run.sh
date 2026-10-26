@@ -7,6 +7,17 @@ set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
+REPORT_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+REPORT_BRANCH="${REPORT_BRANCH:-main}"
+
+# Cloud Shell clones may not have a Git identity configured. Use a local,
+# non-personal identity only for generated run reports.
+if [[ -z "$(git config user.email 2>/dev/null || true)" ]]; then
+  git config user.email "vois-vertex-runner@users.noreply.github.com"
+fi
+if [[ -z "$(git config user.name 2>/dev/null || true)" ]]; then
+  git config user.name "VOIS Vertex Runner"
+fi
 REPORT_DIR="$ROOT_DIR/run-reports"
 REPORT_FILE="$REPORT_DIR/$(date -u +%Y%m%dT%H%M%SZ).md"
 LATEST_FILE="$REPORT_DIR/latest.md"
@@ -152,8 +163,8 @@ cp "$REPORT_FILE" "$LATEST_FILE"
 
 git add run-reports
 git commit -m "Record Vertex run report" >/tmp/vois_git_commit.log 2>&1 || true
-if git push origin main >/tmp/vois_git_push.log 2>&1; then
-  echo "Git report pushed to origin/main."
+if git push origin "HEAD:${REPORT_BRANCH}" >/tmp/vois_git_push.log 2>&1; then
+  echo "Git report pushed to origin/${REPORT_BRANCH}."
 else
   echo "Git report push failed. See /tmp/vois_git_push.log."
   FAILURES=$((FAILURES + 1))
