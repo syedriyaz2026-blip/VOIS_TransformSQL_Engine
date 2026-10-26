@@ -407,7 +407,7 @@ def expression(row, dialect):
             return "NULL /* TODO: missing source column for direct mapping */"
         if len(source_columns(source)) != 1:
             return "NULL /* TODO: direct mapping has multiple source columns */"
-        return qident(source or "source_expression", dialect)
+        return qselect(source or "source_expression", dialect)
     if kind == "Aggregate" and source and norm(rule).strip(" '") in {"direct", "direct mapping"}:
         return f"SUM({qident(source, dialect)})"
     if re.search(r"check\s+previous\s+month|previous\s+month\s+data", rule, re.I) and re.search(r"sub_subscription_cd_prev\s*=\s*prev\.sub_subscription_cd", rule, re.I):
@@ -845,7 +845,9 @@ def generate_row_queries(sheets, dialect="bigquery"):
             source_selects = [qselect(column, dialect) for column in source_columns(row.get("source column name"))]
             pretty_expr = expr.replace("\n", "\n    ")
             select_lines = [f"    {column}," for column in source_selects] if kind != "Direct" else []
-            select_lines.append(f"    {pretty_expr} AS {qselect(target_column, dialect)}")
+            source_name = str(row.get("source column name") or "").strip()
+            target_alias = "" if kind == "Direct" and source_name == target_column else f" AS {qselect(target_column, dialect)}"
+            select_lines.append(f"    {pretty_expr}{target_alias}")
             is_previous_join = re.search(r"check\s+previous\s+month|previous\s+month\s+data", str(row.get("transformation rule") or ""), re.I) and re.search(r"sub_subscription_cd_prev\s*=\s*prev\.sub_subscription_cd", str(row.get("transformation rule") or ""), re.I)
             if is_previous_join:
                 from_clause = previous_month_from_clause(row, dialect)
