@@ -167,6 +167,15 @@ def runtime_error_payload(exc, stage):
             "next_step": f"Ask a project administrator to grant roles/serviceusage.serviceUsageConsumer on {project} to the Vertex/Cloud Shell runtime identity, then retry after IAM propagation.",
             "provider_message": message[:1000],
         })
+    elif "vpc service controls" in lower or "vpcservicecontrolsuniqueidentifier" in lower or "request is prohibited by organization's policy" in lower:
+        project = os.getenv("BIGQUERY_PROJECT") or DEFAULT_BIGQUERY_PROJECT
+        payload.update({
+            "error": f"VPC Service Controls blocked the BigQuery request for project {project}.",
+            "policy_type": "VPC Service Controls",
+            "project": project,
+            "next_step": "Ask the organization/security administrator to allow this runtime in the BigQuery service perimeter, add an approved access level or perimeter bridge, or run VOIS from an approved Vertex/Workbench network inside the perimeter.",
+            "provider_message": message[:1000],
+        })
     return payload
 
 
