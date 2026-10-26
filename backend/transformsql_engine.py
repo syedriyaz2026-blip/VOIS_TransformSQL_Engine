@@ -38,6 +38,13 @@ ALIASES = {
     "target column data type": ["target column data type", "target attribute data type", "target data type", "target datatype", "output data type", "destination data type"],
 }
 
+OPTIONAL_ALIASES = {
+    "source directory path": ["source directory path", "source directory", "source path", "source file path", "source folder"],
+    "source datatype changed": ["source datatype changed", "source data type changed", "datatype changed", "data type changed"],
+    "target dataset": ["target dataset", "destination dataset", "output dataset"],
+    "comment": ["comment", "comments", "note", "notes", "additional comment"],
+}
+
 CONTRACT_FIELD_ALIASES = {
     "source table name": ["source table", "source table name", "input table", "input source table", "source entity"],
     "source column name": ["source column", "source column name", "source field", "source attribute", "input column", "input field"],
@@ -610,7 +617,7 @@ def scan_workbook(path):
         records = []
         for row in rows[header_row + 1:]:
             row_headers = {header_norm(value) for value in row if value not in (None, "")}
-            known_headers = {header_norm(header) for header in HEADERS} | {header_norm(alias) for aliases in CONTRACT_FIELD_ALIASES.values() for alias in aliases} | {header_norm(alias) for values in ALIASES.values() for alias in values}
+            known_headers = {header_norm(header) for header in HEADERS} | {header_norm(alias) for aliases in CONTRACT_FIELD_ALIASES.values() for alias in aliases} | {header_norm(alias) for values in ALIASES.values() for alias in values} | {header_norm(alias) for values in OPTIONAL_ALIASES.values() for alias in values}
             if len(row_headers.intersection(known_headers)) >= 3:
                 continue
             if layout == "contract":
@@ -641,6 +648,11 @@ def scan_workbook(path):
                 record = {}
                 for key in HEADERS:
                     alias = next(alias for alias in ALIASES[key] if header_norm(alias) in normalized)
+                    index = normalized.index(header_norm(alias))
+                    record[key] = row[index] if index < len(row) else None
+            for key, aliases in OPTIONAL_ALIASES.items():
+                alias = next((alias for alias in aliases if header_norm(alias) in normalized), None)
+                if alias:
                     index = normalized.index(header_norm(alias))
                     record[key] = row[index] if index < len(row) else None
             # Some mapping sections omit the header row and use this compact layout:
@@ -737,6 +749,10 @@ def generate_row_queries(sheets, dialect="bigquery"):
                            "source_column": str(row.get("source column name") or ""),
                            "target_table": target_table, "target_column": target_column,
                            "transformation_type": kind, "rule": str(row.get("transformation rule") or ""),
+                           "source_directory_path": str(row.get("source directory path") or ""),
+                           "source_datatype_changed": str(row.get("source datatype changed") or ""),
+                           "target_dataset": str(row.get("target dataset") or ""),
+                           "comment": str(row.get("comment") or ""),
                            "query_from": query_from, "status": status, "validation_errors": validation_errors,
                            "expression": expr, "sql": sql})
     return output
