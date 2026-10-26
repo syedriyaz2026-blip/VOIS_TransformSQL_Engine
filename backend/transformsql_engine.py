@@ -140,6 +140,24 @@ def save_result_to_gcs(payload, label):
         return {"saved": False, "error": str(exc)[:500]}
 
 
+def runtime_error_payload(exc, stage):
+    """Return a precise, actionable error for UI and Vertex run reports."""
+    message = str(exc)
+    payload = {"error": message, "stage": stage, "error_type": type(exc).__name__}
+    lower = message.lower()
+    if "serviceusage.services.use" in lower or "service usage consumer" in lower:
+        project = os.getenv("BIGQUERY_PROJECT") or DEFAULT_BIGQUERY_PROJECT
+        payload.update({
+            "error": f"BigQuery permission denied: the runtime identity cannot use project {project}.",
+            "required_permission": "serviceusage.services.use",
+            "required_role": "roles/serviceusage.serviceUsageConsumer",
+            "project": project,
+            "next_step": f"Ask a project administrator to grant roles/serviceusage.serviceUsageConsumer on {project} to the Vertex/Cloud Shell runtime identity, then retry after IAM propagation.",
+            "provider_message": message[:1000],
+        })
+    return payload
+
+
 def default_workbook_path():
     """Find the standard workbook supplied to the Vertex runner."""
     configured = str(os.getenv("INPUT_XLSX") or "").strip()
@@ -1077,7 +1095,9 @@ class Handler(SimpleHTTPRequestHandler):
                 result = dry_run_bigquery("SELECT 1 AS vois_connection_test")
                 self.send_json({"status": "connected", "project": public_settings().get("project", ""), "location": public_settings().get("location", ""), "auth_source": bigquery_auth_source(), "bytes_processed": result.get("bytes_processed", 0)})
             except Exception as exc:
-                self.send_json({"status": "failed", "error": str(exc)}, 503)
+                response = runtime_error_payload(exc, "bigquery_authentication_or_dry_run")
+                response["status"] = "failed"
+                self.send_json(response, 503)
             return
         if self.path.startswith("/api/v1/"):
             request_id = self.headers.get("X-Correlation-ID") or correlation_id()
@@ -1110,7 +1130,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return
                 self.send_json(run_bigquery(sql))
             except Exception as exc:
-                self.send_json({"error": str(exc), "stage": "bigquery_execution", "error_type": type(exc).__name__}, 400 if isinstance(exc, ValueError) else 503)
+                self.send_json(runtime_error_payload(exc, "bigquery_execution"), 400 if isinstance(exc, ValueError) else 503)
             return
         if self.path == "/api/generate-default":
             workbook = default_workbook_path()
@@ -1137,7 +1157,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"), request.get("target_project"))
                 self.send_json(result)
             except Exception as exc:
-                self.send_json({"error": str(exc), "stage": "target_comparison", "error_type": type(exc).__name__}, 400 if isinstance(exc, ValueError) else 503)
+                self.send_json(runtime_error_payload(exc, "target_comparison"), 400 if isinstance(exc, ValueError) else 503)
             return
         if self.path != "/api/generate":
             self.send_error(404)
