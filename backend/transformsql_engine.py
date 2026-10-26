@@ -582,7 +582,6 @@ def lookup_column(value):
 
 def join_from_clause(row, dialect):
     """Build a conservative LEFT JOIN clause for common mapping-sheet lookup text."""
-    target = str(row.get("target table name") or "target_table").strip()
     source_table = str(row.get("source table name") or "").strip()
     project, source_dataset, target_dataset = row_table_context(row)
     rule = str(row.get("transformation rule") or "")
@@ -591,10 +590,9 @@ def join_from_clause(row, dialect):
     if match:
         lookup = match.group(1).strip("`")
         lookup = lookup.replace("-*.*", "_*").replace("*.*", "*")
-    if not lookup and source_table and source_table.lower() not in {"source_table", "aa_base"}:
-        lookup = source_table.split(",")[0].strip().strip("`")
     if not lookup:
-        return f"{qualified_table(target, target_dataset, project, dialect)} AS T"
+        primary = source_table or "source_table"
+        return f"{qualified_table(primary, source_dataset, project, dialect)} AS T"
     aliases = {"DAT_MONTH_ID", "SUB_SUBSCRIPTION_CD", "CUS_CUSTOMER_CD", "PRICEPLAN_DESC", "CUS_CUSTOMER_CD_HASH_GRP"}
     pairs = re.findall(r"\bT\.?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*T1\.?\s*([A-Za-z_][A-Za-z0-9_]*)", rule, re.I)
     keys = [left for left, right in pairs if left.upper() == right.upper()]
@@ -604,13 +602,14 @@ def join_from_clause(row, dialect):
     if not keys:
         keys = ["PRICEPLAN_DESC"] if "PRICEPLAN" in rule.upper() else ["DAT_MONTH_ID", "SUB_SUBSCRIPTION_CD"]
     condition = " AND ".join(f"T.{key} = L.{key}" for key in dict.fromkeys(keys))
-    return f"{qualified_table(target, target_dataset, project, dialect)} AS T\nLEFT JOIN {qualified_table(lookup, source_dataset, project, dialect)} AS L\n  ON {condition}"
+    primary = source_table or "source_table"
+    return f"{qualified_table(primary, source_dataset, project, dialect)} AS T\nLEFT JOIN {qualified_table(lookup, source_dataset, project, dialect)} AS L\n  ON {condition}"
 
 
 def previous_month_from_clause(row, dialect):
-    target = str(row.get("target table name") or "target_table").strip()
-    project, _, target_dataset = row_table_context(row)
-    table = qualified_table(target, target_dataset, project, dialect)
+    source = str(row.get("source table name") or "source_table").strip()
+    project, source_dataset, _ = row_table_context(row)
+    table = qualified_table(source, source_dataset, project, dialect)
     return f"{table} AS curr\nLEFT JOIN {table} AS prev\n  ON curr.sub_subscription_cd_prev = prev.sub_subscription_cd"
 
 
@@ -778,8 +777,9 @@ def generate_row_queries(sheets, dialect="bigquery"):
             kind = classify(row)
             project, source_dataset, target_dataset = row_table_context(row)
             source_ref = qualified_table(source_table, source_dataset, project, dialect)
-            target_ref = qualified_table(target_table, target_dataset, project, dialect)
-            query_from = target_ref if kind != "Direct" else source_ref
+            # Every mapping expression reads source data. The target reference
+            # is reserved for the load statement and private comparison query.
+            query_from = source_ref
             expr = expression(row, dialect)
             status = "READY" if "TODO:" not in expr else "REVIEW"
             row_number += 1
@@ -944,7 +944,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return
                 self.send_json(run_bigquery(sql))
             except Exception as exc:
-                self.send_json({"error": str(exc)}, 400 if isinstance(exc, ValueError) else 503)
+                self.send_json({"error": str(exc), "stage": "bigquery_execution", "error_type": type(exc).__name__}, 400 if isinstance(exc, ValueError) else 503)
             return
         if self.path == "/api/compare-bigquery":
             try:
@@ -953,7 +953,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"))
                 self.send_json(result)
             except Exception as exc:
-                self.send_json({"error": str(exc)}, 400 if isinstance(exc, ValueError) else 503)
+                self.send_json({"error": str(exc), "stage": "target_comparison", "error_type": type(exc).__name__}, 400 if isinstance(exc, ValueError) else 503)
             return
         if self.path != "/api/generate":
             self.send_error(404)
