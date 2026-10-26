@@ -24,6 +24,11 @@ except ImportError:  # pragma: no cover - supports package-style imports
     from .sql_safety import assert_read_only
 
 ROOT = Path(__file__).resolve().parent
+DEFAULT_BIGQUERY_PROJECT = "vf-gr-mc2-nonlive"
+DEFAULT_SOURCE_DATASET = "vfgr_mc2_nonlive_gr_lake_mc2_processed_s"
+DEFAULT_TARGET_DATASET = "vfgr_mc2_nonlive_gr_lake_mc2_presentation_processed_s"
+DEFAULT_GCS_RESULTS_BUCKET = "narasimha-test-bucket"
+DEFAULT_GCS_RESULTS_PREFIX = "vois-transformsql"
 HEADERS = [
     "source table name", "source column name", "source column data type",
     "transformation type", "transformation rule", "target table name",
@@ -71,6 +76,21 @@ def load_env_file():
                 continue
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    # Fixed VOIS runtime context. Environment values can still override these
+    # defaults for a different deployment, but the UI no longer needs repeated
+    # manual entry for the standard Vertex/BigQuery environment.
+    defaults = {
+        "BIGQUERY_PROJECT": DEFAULT_BIGQUERY_PROJECT,
+        "BIGQUERY_SOURCE_PROJECT": DEFAULT_BIGQUERY_PROJECT,
+        "BIGQUERY_TARGET_PROJECT": DEFAULT_BIGQUERY_PROJECT,
+        "BIGQUERY_SOURCE_DATASET": DEFAULT_SOURCE_DATASET,
+        "BIGQUERY_TARGET_DATASET": DEFAULT_TARGET_DATASET,
+        "GCS_RESULTS_BUCKET": DEFAULT_GCS_RESULTS_BUCKET,
+        "GCS_RESULTS_PREFIX": DEFAULT_GCS_RESULTS_PREFIX,
+    }
+    for key, value in defaults.items():
+        if not os.getenv(key):
+            os.environ[key] = value
 
 
 def resolve_bigquery_project():
@@ -100,13 +120,13 @@ def bigquery_auth_source():
 def save_result_to_gcs(payload, label):
     """Persist a non-secret result artifact in the configured GCS bucket."""
     load_env_file()
-    bucket_name = str(os.getenv("GCS_RESULTS_BUCKET") or "").strip().removeprefix("gs://").strip("/")
+    bucket_name = str(os.getenv("GCS_RESULTS_BUCKET") or DEFAULT_GCS_RESULTS_BUCKET).strip().removeprefix("gs://").strip("/")
     if not bucket_name:
         return {"saved": False, "message": "GCS_RESULTS_BUCKET is not configured"}
     try:
         from google.cloud import storage
         client = storage.Client(project=resolve_bigquery_project() or None)
-        prefix = str(os.getenv("GCS_RESULTS_PREFIX") or "vois-transformsql").strip("/")
+        prefix = str(os.getenv("GCS_RESULTS_PREFIX") or DEFAULT_GCS_RESULTS_PREFIX).strip("/")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         object_name = f"{prefix}/{stamp}-{label}-{uuid.uuid4().hex[:10]}.json"
         blob = client.bucket(bucket_name).blob(object_name)
@@ -141,9 +161,9 @@ def public_settings():
             value = "••••••••"
         variables.append({"key": key, "value": value, "secret": key in secret_keys, "editable": True})
     return {
-        "project": resolve_bigquery_project() or "",
+        "project": resolve_bigquery_project() or os.getenv("BIGQUERY_PROJECT") or DEFAULT_BIGQUERY_PROJECT,
         "location": settings.location or "US",
-        "gcs_results_bucket": os.getenv("GCS_RESULTS_BUCKET", ""),
+        "gcs_results_bucket": os.getenv("GCS_RESULTS_BUCKET") or DEFAULT_GCS_RESULTS_BUCKET,
         "auth_source": bigquery_auth_source(),
         "environment_managed": not bool(credential_path),
         "max_rows": settings.max_rows,
@@ -301,7 +321,7 @@ def compare_bigquery(generated_sql, target_table, target_column, target_dataset=
     except ImportError as exc:
         raise RuntimeError("BigQuery support is not installed. Run: pip install -r requirements.txt") from exc
     project = str(target_project or resolve_bigquery_project() or "").strip()
-    target_dataset = str(target_dataset or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
+    target_dataset = str(target_dataset or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_TARGET_DATASET).strip()
     location = os.getenv("BIGQUERY_LOCATION") or None
     max_billed = os.getenv("BIGQUERY_MAX_BYTES_BILLED", "") or None
     client = bigquery_client()
@@ -377,10 +397,10 @@ def qualified_table(table, dataset="", project="", dialect="bigquery"):
 
 def row_table_context(row):
     runtime_project = resolve_bigquery_project() or ""
-    source_project = str(row.get("_source_project") or os.getenv("BIGQUERY_SOURCE_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or runtime_project).strip()
-    target_project = str(row.get("_target_project") or os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or runtime_project).strip()
-    target_dataset = str(row.get("target dataset") or row.get("_target_dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
-    source_dataset = str(row.get("source dataset") or row.get("_source_dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or target_dataset).strip()
+    source_project = str(row.get("_source_project") or os.getenv("BIGQUERY_SOURCE_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or runtime_project or DEFAULT_BIGQUERY_PROJECT).strip()
+    target_project = str(row.get("_target_project") or os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or runtime_project or DEFAULT_BIGQUERY_PROJECT).strip()
+    target_dataset = str(row.get("target dataset") or row.get("_target_dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_TARGET_DATASET).strip()
+    source_dataset = str(row.get("source dataset") or row.get("_source_dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_SOURCE_DATASET or target_dataset).strip()
     return source_project, source_dataset, target_project, target_dataset
 
 
@@ -918,9 +938,9 @@ def build_result(path, dialect="bigquery", context=None):
                     row[f"_{key}"] = value
     if dialect == "bigquery":
         missing = []
-        if not (context.get("source_dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET")):
+        if not (context.get("source_dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_SOURCE_DATASET):
             missing.append("source dataset")
-        if not (context.get("target_dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET")):
+        if not (context.get("target_dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_TARGET_DATASET):
             missing.append("target dataset")
         if missing:
             raise ValueError("BigQuery prerequisites missing: " + ", ".join(missing) + ". Enter them before generating SQL.")
@@ -991,10 +1011,10 @@ class Handler(SimpleHTTPRequestHandler):
             settings = load_settings()
             load_env_file()
             self.send_json({"env": settings.env, "demo_login_enabled": settings.demo_login_enabled,
-                            "source_project": os.getenv("BIGQUERY_SOURCE_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or "",
-                            "source_dataset": os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or "",
-                            "target_project": os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or "",
-                            "target_dataset": os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or ""})
+                            "source_project": os.getenv("BIGQUERY_SOURCE_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or DEFAULT_BIGQUERY_PROJECT,
+                            "source_dataset": os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_SOURCE_DATASET,
+                            "target_project": os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or DEFAULT_BIGQUERY_PROJECT,
+                            "target_dataset": os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_TARGET_DATASET})
             return
         if self.path == "/api/settings":
             self.send_json(public_settings())
