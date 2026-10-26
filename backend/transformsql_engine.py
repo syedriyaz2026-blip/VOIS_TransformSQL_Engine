@@ -28,13 +28,24 @@ HEADERS = [
 ]
 ALIASES = {
     "source table name": ["source table name", "src table name", "source table"],
-    "source column name": ["source column name", "src column name", "source attribute"],
-    "source column data type": ["source column data type", "src column data type"],
+    "source column name": ["source column name", "src column name", "source attribute", "source column"],
+    "source column data type": ["source column data type", "src column data type", "source data type"],
     "transformation type": ["transformation type", "transform type"],
     "transformation rule": ["transformation rule", "transform rule"],
     "target table name": ["target table name", "target_table_name", "target table"],
-    "target column name": ["target column name", "target attribute"],
-    "target column data type": ["target column data type", "target attribute data type"],
+    "target column name": ["target column name", "target attribute", "target column"],
+    "target column data type": ["target column data type", "target attribute data type", "target data type"],
+}
+
+CONTRACT_HEADERS = {
+    "source table": "source table name",
+    "source column": "source column name",
+    "source data type": "source column data type",
+    "target table": "target table name",
+    "target column": "target column name",
+    "target data type": "target column data type",
+    "transformation logic": "transformation rule",
+    "nature (groupby/ aggregate over dim)": "transformation type",
 }
 
 
@@ -295,7 +306,11 @@ def expression(row, dialect):
     rule = str(row.get("transformation rule") or "").strip()
     kind = classify(row)
     if kind == "Direct":
+        if not source:
+            return "NULL /* TODO: missing source column for direct mapping */"
         return qident(source or "source_expression", dialect)
+    if kind == "Aggregate" and source and norm(rule).strip(" '") in {"direct", "direct mapping"}:
+        return f"SUM({qident(source, dialect)})"
     if re.search(r"check\s+previous\s+month|previous\s+month\s+data", rule, re.I) and re.search(r"sub_subscription_cd_prev\s*=\s*prev\.sub_subscription_cd", rule, re.I):
         return "CASE\n    WHEN curr.F_ACTIVE = 1\n      AND curr.CUS_CUSTOMER_SUB_TYPE_GROUP <> 'SME'\n      AND prev.CUS_CUSTOMER_SUB_TYPE_GROUP = 'SME'\n      AND prev.unitcountable = 1\n    THEN 1\n    ELSE 0\nEND"
     if kind == "Join / lookup" and source:
@@ -384,12 +399,25 @@ def expression(row, dialect):
         return f"LOWER({qident(source or 'source_expression', dialect)})"
     cleaned = rule.replace("_x000D_", " ").replace("\xa0", " ").replace("‘", "'").replace("’", "'")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Mapping sheets sometimes append a prose example after the executable rule.
+    cleaned = re.split(r"\bEx\s*:", cleaned, maxsplit=1, flags=re.I)[0].strip()
+    cleaned = re.sub(r"\bNUMBER\b", "NUMERIC", cleaned, flags=re.I)
+    def convert_substring(match):
+        column, start, length = match.groups()
+        return f"SUBSTR({qselect(column, dialect)}, {int(start) + 1}, {length})"
+    cleaned = re.sub(r"\bsubstring\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", convert_substring, cleaned, flags=re.I)
+    if "||" in cleaned and not re.search(r"\b(?:CASE|SELECT|FROM|WHERE|JOIN)\b", cleaned, re.I):
+        parts = [part.strip() for part in cleaned.split("||")]
+        if len(parts) > 1 and all(re.fullmatch(r"[A-Za-z0-9_().,'%\-+ ]+", part) for part in parts):
+            cleaned = "CONCAT(" + ", ".join(parts) + ")" if dialect == "bigquery" else " || ".join(parts)
     cleaned = re.sub(r"\belse\s+o\b", "ELSE 0", cleaned, flags=re.I)
     cleaned = re.sub(r"^\s*step\s*\d+\s*:\s*", "", cleaned, flags=re.I)
     cleaned = re.sub(r"\b1\.\s*\(", "1 * (", cleaned)
     cleaned = re.sub(r"\bto_date\s*\(\s*([^,]+?)\s*\|\|\s*'01'\s*,\s*'YYYYMMDD'\s*\)", r"PARSE_DATE('%Y%m%d', CONCAT(CAST(\1 AS STRING), '01'))", cleaned, flags=re.I)
     cleaned = re.sub(r"\bto_date\s*\(\s*([^,]+?)\s*,\s*'DD/MM/YYYY'\s*\)", r"PARSE_DATE('%d/%m/%Y', CAST(\1 AS STRING))", cleaned, flags=re.I)
     formula_only = re.split(r"\s+where\s+", cleaned, maxsplit=1, flags=re.I)[0].strip()
+    if dialect == "bigquery" and re.match(r"^(?:PARSE_DATE|PARSE_TIMESTAMP|CAST|SAFE_CAST|IFNULL|COALESCE|SUBSTR|CONCAT|CEIL|FLOOR|ROUND)\s*\(", cleaned, re.I) and cleaned.count("(") == cleaned.count(")"):
+        return cleaned
     if re.fullmatch(r"[A-Za-z0-9_().\s+*/%-]+", formula_only) and re.search(r"[+*/%-]", formula_only) and not re.search(r"\b(?:select|from|join|then|else)\b", formula_only, re.I):
         return formula_only
     comma_if = re.match(r"^if\s*\(?(.*?)\s*,\s*(.*?)\s*,\s*(?:else\s+)?(.*?)\)?$", cleaned, re.I)
@@ -520,9 +548,17 @@ def find_mapping(rows):
     best = None
     for index, row in enumerate(rows[:80]):
         normalized = [norm(value) for value in row]
-        score = sum(header in normalized for header in HEADERS)
-        if score >= 5 and (best is None or score > best[0]):
-            best = (score, index, normalized)
+        standard_score = sum(any(alias in normalized for alias in ALIASES[key]) for key in HEADERS)
+        contract_score = sum(header in normalized for header in CONTRACT_HEADERS)
+        if contract_score >= 6:
+            score = contract_score + 100
+            candidate = (score, index, normalized, "contract")
+        elif standard_score >= 5:
+            candidate = (standard_score, index, normalized, "standard")
+        else:
+            continue
+        if best is None or candidate[0] > best[0]:
+            best = candidate
     return best
 
 
@@ -535,17 +571,39 @@ def scan_workbook(path):
         if not header:
             sheets.append({"name": worksheet.title, "reference": True, "rows": 0, "records": []})
             continue
-        _, header_row, normalized = header
+        _, header_row, normalized, layout = header
         records = []
         for row in rows[header_row + 1:]:
             row_headers = {norm(value) for value in row if value not in (None, "")}
-            known_headers = set(HEADERS) | {alias for values in ALIASES.values() for alias in values}
+            known_headers = set(HEADERS) | set(CONTRACT_HEADERS) | {alias for values in ALIASES.values() for alias in values}
             if len(row_headers.intersection(known_headers)) >= 3:
                 continue
-            record = {}
-            for key in HEADERS:
-                index = normalized.index(next(alias for alias in ALIASES[key] if alias in normalized))
-                record[key] = row[index] if index < len(row) else None
+            if layout == "contract":
+                positions = {key: normalized.index(header_name) for header_name, key in CONTRACT_HEADERS.items() if header_name in normalized}
+                data_type_positions = [i for i, value in enumerate(normalized) if value == "data type"]
+                # This workbook family uses DATA TYPE twice: once after SOURCE COLUMN
+                # and once after TARGET COLUMN. Resolve both by their fixed relative
+                # positions instead of treating the duplicate header as one field.
+                if data_type_positions:
+                    positions.setdefault("source column data type", data_type_positions[0])
+                    positions.setdefault("target column data type", data_type_positions[-1])
+                record = {key: (row[index] if index < len(row) else None) for key, index in positions.items()}
+                logic = str(record.get("transformation rule") or "").strip()
+                nature = str(record.get("transformation type") or "").strip()
+                if norm(logic) in {"direct", "direct mapping"}:
+                    record["transformation type"] = "Aggregate" if "aggregate" in norm(nature) else "Direct"
+                elif "aggregate" in norm(nature):
+                    record["transformation type"] = "Aggregate"
+                else:
+                    record["transformation type"] = "Derived"
+                if not str(record.get("source table name") or "").strip() and str(record.get("target table name") or "").strip():
+                    record["source table name"] = record["target table name"]
+            else:
+                record = {}
+                for key in HEADERS:
+                    alias = next(alias for alias in ALIASES[key] if alias in normalized)
+                    index = normalized.index(alias)
+                    record[key] = row[index] if index < len(row) else None
             # Some mapping sections omit the header row and use this compact layout:
             # source table, source column, rule, target table, target column, target type.
             # In that layout the normal header-position scan looks valid but shifts
@@ -565,7 +623,8 @@ def scan_workbook(path):
                     "target column name": compact_target_col,
                     "target column data type": compact_type,
                 }
-            if any(value not in (None, "") for value in record.values()):
+            meaningful_fields = ("source table name", "source column name", "target table name", "target column name", "transformation rule")
+            if any(record.get(key) not in (None, "") for key in meaningful_fields):
                 records.append(record)
         sheets.append({"name": worksheet.title, "reference": False, "rows": len(records), "records": records, "header_row": header_row + 1})
     workbook.close()
