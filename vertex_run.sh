@@ -71,7 +71,14 @@ fi
 
 if [[ -z "$INPUT_XLSX" ]]; then
   shopt -s nullglob
-  candidates=("$ROOT_DIR"/*.xlsx)
+  exact_name="GR_CONTRACT_IBRO_STM_V0.7_5653.xlsx"
+  candidates=()
+  for candidate in "$ROOT_DIR/$exact_name" "$HOME/$exact_name" "$HOME/Downloads/$exact_name"; do
+    [[ -f "$candidate" ]] && candidates+=("$candidate")
+  done
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    candidates=("$ROOT_DIR"/*.xlsx "$HOME"/*.xlsx "$HOME/Downloads"/*.xlsx)
+  fi
   shopt -u nullglob
   [[ ${#candidates[@]} -eq 1 ]] && INPUT_XLSX="${candidates[0]}"
 fi
@@ -127,6 +134,11 @@ if [[ "$TEST_BIGQUERY" == "1" ]]; then
   else
     fail "BigQuery runtime" "BigQuery runtime is not ready. Run gcloud auth application-default login and verify IAM/table access."
   fi
+  if curl -fsS -X POST http://localhost:8081/api/test-bigquery >/tmp/vois_bigquery_test.json; then
+    pass "BigQuery connection" "BigQuery dry-run connection test passed."
+  else
+    fail "BigQuery connection" "BigQuery dry-run connection test failed. See /tmp/vois_bigquery_test.json and backend.log."
+  fi
 fi
 
 {
@@ -149,6 +161,7 @@ fi
   echo "## Runtime evidence"
   [[ -f /tmp/vois_health.json ]] && { echo '```json'; cat /tmp/vois_health.json; echo '```'; }
   [[ -f /tmp/vois_ready.json ]] && { echo '```json'; cat /tmp/vois_ready.json; echo '```'; }
+  [[ -f /tmp/vois_bigquery_test.json ]] && { echo '## BigQuery connection evidence'; echo '```json'; cat /tmp/vois_bigquery_test.json; echo '```'; }
   if [[ -f "$BACKEND_LOG" ]]; then
     echo "## Recent backend log"
     echo '```text'
@@ -176,6 +189,8 @@ else
 fi
 
 echo "Report: $REPORT_FILE"
+echo "Web preview: http://localhost:8080"
+echo "Backend API: http://localhost:8081"
 echo "Failures: $FAILURES | Warnings: $WARNINGS"
 echo "---------------- VOIS RUN REPORT ----------------"
 cat "$REPORT_FILE"

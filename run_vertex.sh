@@ -7,7 +7,14 @@ cd "$ROOT_DIR"
 
 if [[ -z "${INPUT_XLSX:-}" ]]; then
   shopt -s nullglob
-  files=("$ROOT_DIR"/*.xlsx "$HOME"/*.xlsx)
+  exact_name="GR_CONTRACT_IBRO_STM_V0.7_5653.xlsx"
+  files=()
+  for candidate in "$ROOT_DIR/$exact_name" "$HOME/$exact_name" "$HOME/Downloads/$exact_name"; do
+    [[ -f "$candidate" ]] && files+=("$candidate")
+  done
+  if [[ ${#files[@]} -eq 0 ]]; then
+    files=("$ROOT_DIR"/*.xlsx "$HOME"/*.xlsx "$HOME/Downloads"/*.xlsx)
+  fi
   shopt -u nullglob
   if [[ ${#files[@]} -eq 0 ]]; then
     while IFS= read -r file; do files+=("$file"); done < <(find "$HOME" -maxdepth 4 -type f -iname '*.xlsx' 2>/dev/null)
