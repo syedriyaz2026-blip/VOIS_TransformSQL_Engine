@@ -286,7 +286,7 @@ def strip_sql_comments(sql):
     return "\n".join(line for line in str(sql or "").splitlines() if not line.strip().startswith("--")).strip().rstrip(";").strip()
 
 
-def compare_bigquery(generated_sql, target_table, target_column, target_dataset=""):
+def compare_bigquery(generated_sql, target_table, target_column, target_dataset="", target_project=""):
     """Compare generated and target-column values as multisets, independent of row order."""
     load_env_file()
     generated_sql = strip_sql_comments(generated_sql)
@@ -300,7 +300,7 @@ def compare_bigquery(generated_sql, target_table, target_column, target_dataset=
         from google.cloud import bigquery
     except ImportError as exc:
         raise RuntimeError("BigQuery support is not installed. Run: pip install -r requirements.txt") from exc
-    project = resolve_bigquery_project() or ""
+    project = str(target_project or resolve_bigquery_project() or "").strip()
     target_dataset = str(target_dataset or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
     location = os.getenv("BIGQUERY_LOCATION") or None
     max_billed = os.getenv("BIGQUERY_MAX_BYTES_BILLED", "") or None
@@ -375,10 +375,12 @@ def qualified_table(table, dataset="", project="", dialect="bigquery"):
 
 
 def row_table_context(row):
-    project = resolve_bigquery_project() or ""
-    target_dataset = str(row.get("target dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
-    source_dataset = str(row.get("source dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or target_dataset).strip()
-    return project, source_dataset, target_dataset
+    runtime_project = resolve_bigquery_project() or ""
+    source_project = str(row.get("_source_project") or os.getenv("BIGQUERY_SOURCE_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or runtime_project).strip()
+    target_project = str(row.get("_target_project") or os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or runtime_project).strip()
+    target_dataset = str(row.get("target dataset") or row.get("_target_dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or "").strip()
+    source_dataset = str(row.get("source dataset") or row.get("_source_dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET") or target_dataset).strip()
+    return source_project, source_dataset, target_project, target_dataset
 
 
 def classify(row):
@@ -583,7 +585,7 @@ def lookup_column(value):
 def join_from_clause(row, dialect):
     """Build a conservative LEFT JOIN clause for common mapping-sheet lookup text."""
     source_table = str(row.get("source table name") or "").strip()
-    project, source_dataset, target_dataset = row_table_context(row)
+    source_project, source_dataset, target_project, target_dataset = row_table_context(row)
     rule = str(row.get("transformation rule") or "")
     lookup = ""
     match = re.search(r"(?:left\s+join|inner\s+join|join)\s+([A-Za-z0-9_.`*\-]+)", rule, re.I)
@@ -592,7 +594,7 @@ def join_from_clause(row, dialect):
         lookup = lookup.replace("-*.*", "_*").replace("*.*", "*")
     if not lookup:
         primary = source_table or "source_table"
-        return f"{qualified_table(primary, source_dataset, project, dialect)} AS T"
+        return f"{qualified_table(primary, source_dataset, source_project, dialect)} AS T"
     aliases = {"DAT_MONTH_ID", "SUB_SUBSCRIPTION_CD", "CUS_CUSTOMER_CD", "PRICEPLAN_DESC", "CUS_CUSTOMER_CD_HASH_GRP"}
     pairs = re.findall(r"\bT\.?\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*T1\.?\s*([A-Za-z_][A-Za-z0-9_]*)", rule, re.I)
     keys = [left for left, right in pairs if left.upper() == right.upper()]
@@ -603,13 +605,13 @@ def join_from_clause(row, dialect):
         keys = ["PRICEPLAN_DESC"] if "PRICEPLAN" in rule.upper() else ["DAT_MONTH_ID", "SUB_SUBSCRIPTION_CD"]
     condition = " AND ".join(f"T.{key} = L.{key}" for key in dict.fromkeys(keys))
     primary = source_table or "source_table"
-    return f"{qualified_table(primary, source_dataset, project, dialect)} AS T\nLEFT JOIN {qualified_table(lookup, source_dataset, project, dialect)} AS L\n  ON {condition}"
+    return f"{qualified_table(primary, source_dataset, source_project, dialect)} AS T\nLEFT JOIN {qualified_table(lookup, source_dataset, source_project, dialect)} AS L\n  ON {condition}"
 
 
 def previous_month_from_clause(row, dialect):
     source = str(row.get("source table name") or "source_table").strip()
-    project, source_dataset, _ = row_table_context(row)
-    table = qualified_table(source, source_dataset, project, dialect)
+    source_project, source_dataset, _, _ = row_table_context(row)
+    table = qualified_table(source, source_dataset, source_project, dialect)
     return f"{table} AS curr\nLEFT JOIN {table} AS prev\n  ON curr.sub_subscription_cd_prev = prev.sub_subscription_cd"
 
 
@@ -748,9 +750,9 @@ def generate_queries(sheets, dialect="bigquery"):
             if not rows:
                 continue
             source = next((str(row.get("source table name")).strip() for row in rows if row.get("source table name")), "source_table")
-            project, source_dataset, target_dataset = row_table_context(rows[0])
-            source_ref = qualified_table(source, source_dataset, project, dialect)
-            target_ref = qualified_table(target, target_dataset, project, dialect)
+            source_project, source_dataset, target_project, target_dataset = row_table_context(rows[0])
+            source_ref = qualified_table(source, source_dataset, source_project, dialect)
+            target_ref = qualified_table(target, target_dataset, target_project, dialect)
             columns = ",\n".join(f"  {qident(row['target column name'], dialect)}" for row in rows)
             expressions = ",\n".join(
                 f"  {expression(row, dialect)} AS {qident(row['target column name'], dialect)} -- {classify(row)}"
@@ -775,8 +777,8 @@ def generate_row_queries(sheets, dialect="bigquery"):
                 continue
             source_table = str(row.get("source table name") or "source_table").strip()
             kind = classify(row)
-            project, source_dataset, target_dataset = row_table_context(row)
-            source_ref = qualified_table(source_table, source_dataset, project, dialect)
+            source_project, source_dataset, target_project, target_dataset = row_table_context(row)
+            source_ref = qualified_table(source_table, source_dataset, source_project, dialect)
             # Every mapping expression reads source data. The target reference
             # is reserved for the load statement and private comparison query.
             query_from = source_ref
@@ -808,8 +810,10 @@ def generate_row_queries(sheets, dialect="bigquery"):
                            "target_table": target_table, "target_column": target_column,
                            "transformation_type": kind, "rule": str(row.get("transformation rule") or ""),
                            "source_directory_path": str(row.get("source directory path") or ""),
+                           "source_project": source_project,
                            "source_dataset": source_dataset,
                            "source_datatype_changed": str(row.get("source datatype changed") or ""),
+                           "target_project": target_project,
                            "target_dataset": target_dataset,
                            "comment": str(row.get("comment") or ""),
                            "query_from": query_from, "status": status, "validation_errors": validation_errors,
@@ -817,8 +821,23 @@ def generate_row_queries(sheets, dialect="bigquery"):
     return output
 
 
-def build_result(path, dialect="bigquery"):
+def build_result(path, dialect="bigquery", context=None):
     sheets = scan_workbook(path)
+    context = context or {}
+    for sheet in sheets:
+        for row in sheet.get("records", []):
+            for key in ("source_project", "source_dataset", "target_project", "target_dataset"):
+                value = str(context.get(key) or "").strip()
+                if value:
+                    row[f"_{key}"] = value
+    if dialect == "bigquery":
+        missing = []
+        if not (context.get("source_dataset") or os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET")):
+            missing.append("source dataset")
+        if not (context.get("target_dataset") or os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET")):
+            missing.append("target dataset")
+        if missing:
+            raise ValueError("BigQuery prerequisites missing: " + ", ".join(missing) + ". Enter them before generating SQL.")
     queries = generate_queries(sheets, dialect)
     row_queries = generate_row_queries(sheets, dialect)
     rows = [row for sheet in sheets if not sheet["reference"] for row in sheet["records"]]
@@ -924,7 +943,7 @@ class Handler(SimpleHTTPRequestHandler):
                     result = run_bigquery(str(request.get("sql") or ""))
                     result["correlation_id"] = request_id
                 elif self.path == "/api/v1/compare-bigquery":
-                    result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"))
+                    result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"), request.get("target_project"))
                     result["correlation_id"] = request_id
                 else:
                     self.send_json(error_payload(TransformSQLError("INVALID_REQUEST", "Unknown v1 endpoint", 404), request_id), 404)
@@ -950,7 +969,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 request = json.loads(self.rfile.read(length).decode("utf-8"))
-                result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"))
+                result = compare_bigquery(request.get("generated_sql"), request.get("target_table"), request.get("target_column"), request.get("target_dataset"), request.get("target_project"))
                 self.send_json(result)
             except Exception as exc:
                 self.send_json({"error": str(exc), "stage": "target_comparison", "error_type": type(exc).__name__}, 400 if isinstance(exc, ValueError) else 503)
@@ -975,8 +994,13 @@ class Handler(SimpleHTTPRequestHandler):
         with temp_handle:
             temp_handle.write(upload["value"])
         dialect = (form.get("dialect") or {}).get("value", b"bigquery").decode("utf-8", "ignore") or "bigquery"
+        context = {}
+        for key in ("source_project", "source_dataset", "target_project", "target_dataset"):
+            value = (form.get(key) or {}).get("value", b"").decode("utf-8", "ignore").strip()
+            if value:
+                context[key] = value
         try:
-            payload = build_result(temp, dialect)
+            payload = build_result(temp, dialect, context)
         except Exception as exc:
             self.send_json({"error": f"Excel workbook could not be read: {exc}", "code": "INVALID_WORKBOOK"}, 400)
             return
