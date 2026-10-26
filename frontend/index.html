@@ -48,12 +48,11 @@
       </section>
       <section id="settingsView" class="hidden">
         <div class="section-title"><div><p class="eyebrow">SETTINGS</p><h3>BigQuery connection</h3><p class="section-subtitle">Update project, region, limits, and the local service-account file path. Secret JSON contents are never displayed.</p></div><span id="settingsStatus" class="status-pill">Local configuration</span></div>
-        <form id="settingsForm" class="panel settings-grid">
-          <label>Google Cloud project<input id="settingProject" name="project" placeholder="your-gcp-project-id" /></label>
-          <label>BigQuery location<input id="settingLocation" name="location" value="US" /></label>
-          <label class="settings-wide">Service-account JSON path<input id="settingCredentials" name="credentials_path" placeholder="C:\\secure\\gcp-service-account.json" /><small id="credentialStatus" class="count">Path only; credential contents are never uploaded.</small></label>
-          <div class="settings-actions"><button class="primary" type="submit">Save BigQuery settings</button><button id="testBigQueryBtn" class="secondary" type="button">Test BigQuery connection</button><button id="reloadSettingsBtn" class="secondary" type="button">Reload</button></div>
-        </form>
+        <div class="panel runtime-settings">
+          <div class="runtime-settings-head"><div><h3>Vertex runtime connection</h3><p class="section-subtitle">BigQuery uses the credentials and project already attached to this Vertex AI environment.</p></div><span class="runtime-badge">ENVIRONMENT MANAGED</span></div>
+          <div class="runtime-settings-grid"><div><span>Authentication</span><strong id="settingAuthSource">Application Default Credentials</strong></div><div><span>Google Cloud project</span><strong id="settingProject">Discovered from runtime</strong></div><div><span>BigQuery location</span><strong id="settingLocation">Runtime default</strong></div><div><span>Credential files</span><strong id="credentialStatus">Not configured in VOIS</strong></div></div>
+          <div class="settings-actions"><button id="testBigQueryBtn" class="primary" type="button">Test BigQuery connection</button><button id="reloadSettingsBtn" class="secondary" type="button">Reload runtime status</button></div>
+        </div>
       </section>
       <footer>VOIS Data Transformation Studio · SQL is generated for review. Validate business rules and dialect-specific syntax before deployment.</footer>
     </main>

@@ -5,10 +5,11 @@ Use this file after placing the complete Sameer_Module folder anywhere, includin
 Open PowerShell, change directory into this folder, then paste the commands below.
 
 IMPORTANT:
+- Run this inside the Vertex AI / Workbench environment where BigQuery access is already configured.
 - Do not paste a service-account JSON file into this folder.
-- The Settings page can update the same values later.
-- The first run opens backend/.env so you can enter the Google Cloud project and credential path.
-- The service account needs BigQuery Job User and BigQuery Data Viewer permissions.
+- VOIS uses the active Vertex/Google Application Default Credentials automatically.
+- The Settings page only reports the runtime connection and tests it; teammates do not configure credentials in VOIS.
+- The runtime identity needs BigQuery Job User and BigQuery Data Viewer permissions.
 
 ONE-GO POWERSHELL START COMMANDS
 --------------------------------
@@ -19,8 +20,6 @@ Set-Location $ModuleRoot
 if (-not (Test-Path -LiteralPath '.\backend\.env')) {
     Copy-Item -LiteralPath '.\backend\.env.example' -Destination '.\backend\.env'
 }
-
-Start-Process -FilePath 'notepad.exe' -ArgumentList (Join-Path $ModuleRoot 'backend\.env') -Wait
 
 python -m pip install -r '.\backend\requirements.txt'
 
@@ -54,14 +53,12 @@ LOCAL LOGIN
 Username: admin
 Password: transform123
 
-BIGQUERY .ENV VALUES
+VERTEX RUNTIME AUTHENTICATION
 --------------------
 
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-GOOGLE_APPLICATION_CREDENTIALS=C:\secure\gcp-service-account.json
-BIGQUERY_LOCATION=US
-BIGQUERY_MAX_ROWS=500
-BIGQUERY_MAX_BYTES_BILLED=1000000000
+Leave GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS unset in Vertex mode.
+The backend discovers the active project and credentials from the Vertex runtime.
+Optional runtime controls such as BIGQUERY_LOCATION and BIGQUERY_MAX_ROWS may remain in .env.
 
 All environment variables are loaded automatically from backend/.env when the backend starts.
 The VOIS Settings page is intentionally separate and shows only BigQuery connection settings:

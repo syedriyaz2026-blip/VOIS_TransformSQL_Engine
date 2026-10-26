@@ -62,6 +62,30 @@ def load_env_file():
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def resolve_bigquery_project():
+    """Resolve project from explicit env first, then Vertex/Google ADC context."""
+    explicit = os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+    if explicit:
+        return explicit.strip()
+    try:
+        import google.auth
+        _, detected = google.auth.default()
+        return (detected or "").strip() or None
+    except Exception:
+        return None
+
+
+def bigquery_client():
+    """Create a client using the runtime's ADC; no credential file is required."""
+    from google.cloud import bigquery
+    project = resolve_bigquery_project()
+    return bigquery.Client(project=project) if project else bigquery.Client()
+
+
+def bigquery_auth_source():
+    return "service-account environment variable" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") else "Vertex/Google Application Default Credentials"
+
+
 def public_settings():
     """Return editable BigQuery configuration without exposing secret contents."""
     load_env_file()
@@ -85,8 +109,10 @@ def public_settings():
             value = "••••••••"
         variables.append({"key": key, "value": value, "secret": key in secret_keys, "editable": True})
     return {
-        "project": settings.project or "",
+        "project": resolve_bigquery_project() or "",
         "location": settings.location or "US",
+        "auth_source": bigquery_auth_source(),
+        "environment_managed": not bool(credential_path),
         "max_rows": settings.max_rows,
         "max_bytes_billed": settings.max_bytes_billed or "",
         "credentials_path": credential_path,
@@ -171,7 +197,7 @@ def run_bigquery(sql):
     location = os.getenv("BIGQUERY_LOCATION") or None
     max_rows = max(1, min(int(os.getenv("BIGQUERY_MAX_ROWS", "500")), 5000))
     max_billed = os.getenv("BIGQUERY_MAX_BYTES_BILLED", "") or None
-    client = bigquery.Client(project=project) if project else bigquery.Client()
+    client = bigquery_client()
     config = bigquery.QueryJobConfig(use_legacy_sql=False)
     if max_billed:
         config.maximum_bytes_billed = int(max_billed)
@@ -210,7 +236,7 @@ def dry_run_bigquery(sql):
     except ImportError as exc:
         raise RuntimeError("BigQuery support is not installed. Run: pip install -r requirements.txt") from exc
     settings = load_settings()
-    client = bigquery.Client(project=settings.project) if settings.project else bigquery.Client()
+    client = bigquery_client()
     config = bigquery.QueryJobConfig(use_legacy_sql=False, dry_run=True, use_query_cache=False)
     if settings.max_bytes_billed is not None:
         config.maximum_bytes_billed = settings.max_bytes_billed
@@ -242,7 +268,7 @@ def compare_bigquery(generated_sql, target_table, target_column):
     project = os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
     location = os.getenv("BIGQUERY_LOCATION") or None
     max_billed = os.getenv("BIGQUERY_MAX_BYTES_BILLED", "") or None
-    client = bigquery.Client(project=project) if project else bigquery.Client()
+    client = bigquery_client()
     config = bigquery.QueryJobConfig(use_legacy_sql=False)
     if max_billed:
         config.maximum_bytes_billed = int(max_billed)
@@ -775,8 +801,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == "/readyz":
             settings = load_settings()
-            ready = bool(settings.project or settings.env == "local")
-            self.send_json({"status": "ready" if ready else "not_ready", "checks": {"configuration": "ok" if ready else "failed"}}, 200 if ready else 503)
+            project = resolve_bigquery_project()
+            ready = bool(project or settings.env == "local")
+            self.send_json({"status": "ready" if ready else "not_ready", "checks": {"configuration": "ok" if ready else "failed", "auth_source": bigquery_auth_source(), "project_discovered": bool(project)}}, 200 if ready else 503)
             return
         self.send_error(404)
 
@@ -792,7 +819,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/test-bigquery":
             try:
                 result = dry_run_bigquery("SELECT 1 AS vois_connection_test")
-                self.send_json({"status": "connected", "project": public_settings().get("project", ""), "location": public_settings().get("location", ""), "bytes_processed": result.get("bytes_processed", 0)})
+                self.send_json({"status": "connected", "project": public_settings().get("project", ""), "location": public_settings().get("location", ""), "auth_source": bigquery_auth_source(), "bytes_processed": result.get("bytes_processed", 0)})
             except Exception as exc:
                 self.send_json({"status": "failed", "error": str(exc)}, 503)
             return
