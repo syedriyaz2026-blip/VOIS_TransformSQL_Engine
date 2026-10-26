@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
 import tempfile
 import time
+import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -93,6 +95,25 @@ def bigquery_client():
 
 def bigquery_auth_source():
     return "service-account environment variable" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") else "Vertex/Google Application Default Credentials"
+
+
+def save_result_to_gcs(payload, label):
+    """Persist a non-secret result artifact in the configured GCS bucket."""
+    load_env_file()
+    bucket_name = str(os.getenv("GCS_RESULTS_BUCKET") or "").strip().removeprefix("gs://").strip("/")
+    if not bucket_name:
+        return {"saved": False, "message": "GCS_RESULTS_BUCKET is not configured"}
+    try:
+        from google.cloud import storage
+    except ImportError as exc:
+        raise RuntimeError("GCS result storage is not installed. Run: pip install -r requirements.txt") from exc
+    client = storage.Client(project=resolve_bigquery_project() or None)
+    prefix = str(os.getenv("GCS_RESULTS_PREFIX") or "vois-transformsql").strip("/")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    object_name = f"{prefix}/{stamp}-{label}-{uuid.uuid4().hex[:10]}.json"
+    blob = client.bucket(bucket_name).blob(object_name)
+    blob.upload_from_string(json.dumps(payload, default=str), content_type="application/json")
+    return {"saved": True, "uri": f"gs://{bucket_name}/{object_name}"}
 
 
 def public_settings():
@@ -228,9 +249,11 @@ def run_bigquery(sql):
         if len(rows) >= max_rows:
             break
         rows.append({field["name"]: str(row[field["name"]]) if row[field["name"]] is not None else None for field in fields})
-    return {"job_id": job.job_id, "project": client.project, "location": location, "row_count": len(rows),
-            "schema": fields, "rows": rows, "bytes_processed": getattr(job, "total_bytes_processed", None),
-            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1), "truncated": len(rows) >= max_rows}
+    result = {"job_id": job.job_id, "project": client.project, "location": location, "row_count": len(rows),
+              "schema": fields, "rows": rows, "bytes_processed": getattr(job, "total_bytes_processed", None),
+              "elapsed_ms": round((time.perf_counter() - started) * 1000, 1), "truncated": len(rows) >= max_rows}
+    result["gcs"] = save_result_to_gcs({"kind": "generated_result", "job_id": job.job_id, "project": client.project, "schema": fields, "rows": rows}, "generated")
+    return result
 
 
 def dry_run_bigquery(sql):
@@ -300,11 +323,13 @@ diff AS (SELECT COALESCE(g.value, t.value) AS value, COALESCE(g.value_count, 0) 
     generated_count = int(summary_row["generated_row_count"] if summary_row else 0)
     target_count = int(summary_row["target_row_count"] if summary_row else 0)
     mismatch_count = int(summary_row["mismatch_value_count"] if summary_row else 0)
-    return {"status": "PASS" if mismatch_count == 0 and generated_count == target_count else "FAIL",
-            "target_table": target_table, "target_column": target_column,
-            "generated_row_count": generated_count, "target_row_count": target_count,
-            "mismatch_value_count": mismatch_count, "deviations": deviations,
-            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1), "comparison_mode": "value counts, order independent"}
+    result = {"status": "PASS" if mismatch_count == 0 and generated_count == target_count else "FAIL",
+              "target_table": target_table, "target_column": target_column,
+              "generated_row_count": generated_count, "target_row_count": target_count,
+              "mismatch_value_count": mismatch_count, "deviations": deviations,
+              "elapsed_ms": round((time.perf_counter() - started) * 1000, 1), "comparison_mode": "value counts, order independent"}
+    result["gcs"] = save_result_to_gcs({"kind": "target_comparison", **result}, "comparison")
+    return result
 
 
 def norm(value):
