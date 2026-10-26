@@ -2,6 +2,8 @@
 *.env
 *.json
 !package.json
+*.xlsx
+*.log
 __pycache__/
 *.py[cod]
 .pytest_cache/
