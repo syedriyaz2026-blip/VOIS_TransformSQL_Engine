@@ -35,7 +35,20 @@ pass() { record "PASS" "$1" "$2"; }
 warn() { WARNINGS=$((WARNINGS + 1)); record "WARN" "$1" "$2"; }
 fail() { FAILURES=$((FAILURES + 1)); record "FAIL" "$1" "$2"; }
 
+stop_vois_ports() {
+  # Always clear the exact VOIS ports before starting a fresh same-origin run.
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k 8080/tcp >/dev/null 2>&1 || true
+    fuser -k 8081/tcp >/dev/null 2>&1 || true
+  fi
+  pkill -f "transformsql_engine.py --serve --port 8080" >/dev/null 2>&1 || true
+  pkill -f "transformsql_engine.py --serve --port 8081" >/dev/null 2>&1 || true
+  pkill -f "http.server 8080 --directory frontend" >/dev/null 2>&1 || true
+  sleep 1
+}
+
 mkdir -p "$REPORT_DIR"
+stop_vois_ports
 
 if git diff --quiet && git diff --cached --quiet; then
   if git pull --rebase origin main >/tmp/vois_git_pull.log 2>&1; then
@@ -111,9 +124,6 @@ else
 fi
 
 if [[ "$START_APP" == "1" ]]; then
-  pkill -f "transformsql_engine.py --serve --port 8080" >/dev/null 2>&1 || true
-  pkill -f "transformsql_engine.py --serve --port 8081" >/dev/null 2>&1 || true
-  pkill -f "http.server 8080 --directory frontend" >/dev/null 2>&1 || true
   nohup python3 backend/transformsql_engine.py --serve --port 8080 >"$BACKEND_LOG" 2>&1 &
   sleep 3
   if curl -fsS http://localhost:8080/healthz >/tmp/vois_health.json; then
