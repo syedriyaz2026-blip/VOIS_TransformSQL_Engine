@@ -133,6 +133,18 @@ fi
   echo "## Runtime evidence"
   [[ -f /tmp/vois_health.json ]] && { echo '```json'; cat /tmp/vois_health.json; echo '```'; }
   [[ -f /tmp/vois_ready.json ]] && { echo '```json'; cat /tmp/vois_ready.json; echo '```'; }
+  if [[ -f "$BACKEND_LOG" ]]; then
+    echo "## Recent backend log"
+    echo '```text'
+    tail -n 80 "$BACKEND_LOG"
+    echo '```'
+  fi
+  if [[ -f "$FRONTEND_LOG" ]]; then
+    echo "## Recent frontend log"
+    echo '```text'
+    tail -n 80 "$FRONTEND_LOG"
+    echo '```'
+  fi
   echo
   echo "Logs remain local in backend.log and frontend.log; secrets are not written to this report."
 } >"$REPORT_FILE"
@@ -149,4 +161,7 @@ fi
 
 echo "Report: $REPORT_FILE"
 echo "Failures: $FAILURES | Warnings: $WARNINGS"
+echo "---------------- VOIS RUN REPORT ----------------"
+cat "$REPORT_FILE"
+echo "-------------- END VOIS RUN REPORT --------------"
 [[ "$FAILURES" -eq 0 ]] && exit 0 || exit 1
