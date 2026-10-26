@@ -29,6 +29,7 @@ DEFAULT_SOURCE_DATASET = "vfgr_mc2_nonlive_gr_lake_mc2_processed_s"
 DEFAULT_TARGET_DATASET = "vfgr_mc2_nonlive_gr_lake_mc2_presentation_processed_s"
 DEFAULT_GCS_RESULTS_BUCKET = "narasimha-test-bucket"
 DEFAULT_GCS_RESULTS_PREFIX = "vois-transformsql"
+DEFAULT_WORKBOOK_NAME = "GR_CONTRACT_IBRO_STM_V0.7_5653.xlsx"
 HEADERS = [
     "source table name", "source column name", "source column data type",
     "transformation type", "transformation rule", "target table name",
@@ -136,6 +137,27 @@ def save_result_to_gcs(payload, label):
         return {"saved": False, "error": "GCS storage library is not installed; rerun the Vertex runner."}
     except Exception as exc:
         return {"saved": False, "error": str(exc)[:500]}
+
+
+def default_workbook_path():
+    """Find the standard workbook supplied to the Vertex runner."""
+    configured = str(os.getenv("INPUT_XLSX") or "").strip()
+    candidates = [Path(configured)] if configured else []
+    candidates.extend([
+        ROOT / DEFAULT_WORKBOOK_NAME,
+        Path.home() / DEFAULT_WORKBOOK_NAME,
+        Path.home() / "Downloads" / DEFAULT_WORKBOOK_NAME,
+    ])
+    seen = set()
+    for candidate in candidates:
+        resolved = candidate.expanduser()
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.is_file() and resolved.suffix.lower() == ".xlsx":
+            return resolved
+    return None
 
 
 def public_settings():
@@ -1016,6 +1038,11 @@ class Handler(SimpleHTTPRequestHandler):
                             "target_project": os.getenv("BIGQUERY_TARGET_PROJECT") or os.getenv("BIGQUERY_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT") or resolve_bigquery_project() or DEFAULT_BIGQUERY_PROJECT,
                             "target_dataset": os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET") or DEFAULT_TARGET_DATASET})
             return
+        if self.path == "/api/default-workbook":
+            workbook = default_workbook_path()
+            self.send_json({"available": bool(workbook), "filename": workbook.name if workbook else DEFAULT_WORKBOOK_NAME,
+                            "size_bytes": workbook.stat().st_size if workbook else 0})
+            return
         if self.path == "/api/settings":
             self.send_json(public_settings())
             return
@@ -1075,6 +1102,24 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(run_bigquery(sql))
             except Exception as exc:
                 self.send_json({"error": str(exc), "stage": "bigquery_execution", "error_type": type(exc).__name__}, 400 if isinstance(exc, ValueError) else 503)
+            return
+        if self.path == "/api/generate-default":
+            workbook = default_workbook_path()
+            if not workbook:
+                self.send_json({"error": f"Default workbook not found: {DEFAULT_WORKBOOK_NAME}", "code": "DEFAULT_WORKBOOK_NOT_FOUND"}, 404)
+                return
+            try:
+                load_env_file()
+                payload = build_result(workbook, "bigquery", {
+                    "source_project": os.getenv("BIGQUERY_SOURCE_PROJECT") or DEFAULT_BIGQUERY_PROJECT,
+                    "source_dataset": os.getenv("BIGQUERY_SOURCE_DATASET") or DEFAULT_SOURCE_DATASET,
+                    "target_project": os.getenv("BIGQUERY_TARGET_PROJECT") or DEFAULT_BIGQUERY_PROJECT,
+                    "target_dataset": os.getenv("BIGQUERY_TARGET_DATASET") or DEFAULT_TARGET_DATASET,
+                })
+                payload["workbook"] = {"filename": workbook.name, "size_bytes": workbook.stat().st_size}
+                self.send_json(payload)
+            except Exception as exc:
+                self.send_json({"error": f"Default workbook SQL generation failed: {exc}", "code": "DEFAULT_WORKBOOK_GENERATION_FAILED"}, 400)
             return
         if self.path == "/api/compare-bigquery":
             try:
