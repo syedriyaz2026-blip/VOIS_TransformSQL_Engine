@@ -40,7 +40,7 @@ Start-Process -FilePath 'python' `
 Start-Sleep -Seconds 2
 
 Invoke-WebRequest 'http://localhost:8080/healthz' -UseBasicParsing
-Start-Process 'http://localhost:8080'
+# Open Web Preview manually on port 8080 when you are ready.
 
 VERTEX AI / CLOUD SHELL SYNCHRONIZED RUNNER
 -------------------------------------------
