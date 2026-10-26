@@ -398,10 +398,15 @@ def classify(row):
 def expression(row, dialect):
     source = str(row.get("source column name") or "").strip()
     rule = str(row.get("transformation rule") or "").strip()
+    target_column = str(row.get("target column name") or "").strip()
+    if target_column:
+        rule = re.sub(rf"\s+AS\s+{re.escape(target_column)}\s*$", "", rule, flags=re.I).strip()
     kind = classify(row)
     if kind == "Direct":
         if not source:
             return "NULL /* TODO: missing source column for direct mapping */"
+        if len(source_columns(source)) != 1:
+            return "NULL /* TODO: direct mapping has multiple source columns */"
         return qident(source or "source_expression", dialect)
     if kind == "Aggregate" and source and norm(rule).strip(" '") in {"direct", "direct mapping"}:
         return f"SUM({qident(source, dialect)})"
@@ -509,6 +514,7 @@ def expression(row, dialect):
     cleaned = re.sub(r"\b1\.\s*\(", "1 * (", cleaned)
     cleaned = re.sub(r"\bto_date\s*\(\s*([^,]+?)\s*\|\|\s*'01'\s*,\s*'YYYYMMDD'\s*\)", r"PARSE_DATE('%Y%m%d', CONCAT(CAST(\1 AS STRING), '01'))", cleaned, flags=re.I)
     cleaned = re.sub(r"\bto_date\s*\(\s*([^,]+?)\s*,\s*'DD/MM/YYYY'\s*\)", r"PARSE_DATE('%d/%m/%Y', CAST(\1 AS STRING))", cleaned, flags=re.I)
+    cleaned = translate_legacy_dates(cleaned)
     formula_only = re.split(r"\s+where\s+", cleaned, maxsplit=1, flags=re.I)[0].strip()
     if dialect == "bigquery" and re.match(r"^(?:PARSE_DATE|PARSE_TIMESTAMP|CAST|SAFE_CAST|IFNULL|COALESCE|SUBSTR|CONCAT|CEIL|FLOOR|ROUND)\s*\(", cleaned, re.I) and cleaned.count("(") == cleaned.count(")"):
         return cleaned
@@ -524,10 +530,11 @@ def expression(row, dialect):
         choices = ", ".join("'" + value.strip().upper() + "'" for value in values.split(","))
         return f"CASE WHEN UPPER(TRANSACTION_TYPE) IN ({choices}) THEN {qselect(yes_value, dialect)} ELSE {qselect(no_value, dialect)} END"
     if re.search(r"months_between", cleaned, re.I) and dialect == "bigquery":
-        match = re.search(r"months_between\s*\(\s*(.+?)\s*,\s*(.+?)\s*\)", cleaned, re.I)
-        if match:
-            left, right = match.groups()
-            return f"DATE_DIFF({left.strip()}, {right.strip()}, MONTH) + 1"
+        def months_replacement(inner):
+            args = split_sql_args(inner)
+            return f"DATE_DIFF({args[0]}, {args[1]}, MONTH)" if len(args) == 2 else f"MONTHS_BETWEEN({inner})"
+        cleaned = replace_sql_function(cleaned, "months_between", months_replacement)
+        cleaned = re.sub(r"\bDATE_DIFF\(([^\n]+?),\s*([^\n]+?),\s*MONTH\)\s*\+\s*1", r"DATE_DIFF(\1, \2, MONTH) + 1", cleaned, flags=re.I)
     any_match = re.search(r"(UPPER\s*\(\s*[A-Za-z_][\w.]*\s*\)|LOWER\s*\(\s*[A-Za-z_][\w.]*\s*\)|[A-Za-z_][\w.]*)\s+LIKE\s+any\s*\(([^)]*)\)", cleaned, re.I)
     if any_match:
         column, values = any_match.groups()
@@ -560,26 +567,76 @@ def expression(row, dialect):
 def pretty_case(value):
     """Format a CASE rule as readable BigQuery Standard SQL."""
     text = re.sub(r"\s+", " ", value.replace("_x000D_", " ")).strip()
-    match = re.match(r"CASE\s+WHEN\s+(.+?)\s+THEN\s+(.+?)\s+ELSE\s+(.+?)\s+END$", text, re.I)
-    if not match:
-        return text
-    condition, true_value, false_value = match.groups()
-    condition = re.sub(r"\bupper\s*\(", "UPPER(", condition, flags=re.I)
-    condition = re.sub(r"\blower\s*\(", "LOWER(", condition, flags=re.I)
-    if condition.startswith("(") and condition.endswith(")"):
-        condition = condition[1:-1].strip()
-    parts = [part.strip() for part in re.split(r"\s+OR\s+", condition, flags=re.I) if part.strip()]
-    if len(parts) > 1:
-        condition_sql = "\n".join([f"    WHEN {parts[0]}"] + [f"      OR {part}" for part in parts[1:]])
-    else:
-        condition_sql = f"    WHEN {condition.strip()}"
-    return f"CASE\n{condition_sql}\n    THEN {true_value.strip()}\n    ELSE {false_value.strip()}\nEND"
+    text = re.sub(r"\bupper\s*\(", "UPPER(", text, flags=re.I)
+    text = re.sub(r"\blower\s*\(", "LOWER(", text, flags=re.I)
+    return text
 
 
 def lookup_column(value):
     """Return the first usable SQL column from a descriptive mapping value."""
     match = re.search(r"(?:^|[,\s])([A-Za-z_][A-Za-z0-9_]*)\s*(?:,|$)", str(value or "").strip())
     return match.group(1) if match else ""
+
+
+def source_columns(value):
+    """Extract identifiers from comma/newline-delimited source-column cells."""
+    text = str(value or "").replace("\r", "\n").strip()
+    if not text:
+        return []
+    ignored = {"and", "or", "from", "where", "join", "select", "na", "null"}
+    return list(dict.fromkeys(name for name in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text) if name.lower() not in ignored))
+
+
+def split_sql_args(value):
+    parts, start, depth, quote = [], 0, 0, None
+    for index, char in enumerate(value):
+        if char in "'\"":
+            quote = None if quote == char else (char if quote is None else quote)
+        elif not quote:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif char == "," and depth == 0:
+                parts.append(value[start:index].strip())
+                start = index + 1
+    parts.append(value[start:].strip())
+    return parts
+
+
+def replace_sql_function(text, name, replacer):
+    match = re.search(rf"\b{re.escape(name)}\s*\(", text, re.I)
+    if not match:
+        return text
+    opening = text.find("(", match.start(), match.end())
+    depth, quote, closing = 0, None, None
+    for index in range(opening, len(text)):
+        char = text[index]
+        if char in "'\"":
+            quote = None if quote == char else (char if quote is None else quote)
+        elif not quote:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    closing = index
+                    break
+    if closing is None:
+        return text
+    inner = text[opening + 1:closing]
+    replacement = replacer(inner)
+    return text[:match.start()] + replacement + text[closing + 1:]
+
+
+def translate_legacy_dates(text):
+    formats = {"dd.mm.yyyy": "%d.%m.%Y", "dd/mm/yyyy": "%d/%m/%Y", "yyyy-mm-dd": "%Y-%m-%d"}
+    def date_match(match):
+        column, fmt = match.groups()
+        return f"PARSE_DATE('{formats.get(fmt.lower(), fmt)}', SUBSTR({column}, 1, 10))"
+    text = re.sub(r"to_date\(\s*substr\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*0\s*,\s*10\s*\)\s*,\s*'([^']+)'\s*\)", date_match, text, flags=re.I)
+    text = re.sub(r"to_date\(\s*'([^']+)'\s*,\s*'([^']+)'\s*\)", lambda m: f"PARSE_DATE('{formats.get(m.group(2).lower(), m.group(2))}', '{m.group(1)}')", text, flags=re.I)
+    return re.sub(r"\bNVL\s*\(", "COALESCE(", text, flags=re.I)
 
 
 def join_from_clause(row, dialect):
@@ -785,10 +842,10 @@ def generate_row_queries(sheets, dialect="bigquery"):
             expr = expression(row, dialect)
             status = "READY" if "TODO:" not in expr else "REVIEW"
             row_number += 1
-            source_select = qselect(str(row.get("source column name") or "").strip(), dialect) if row.get("source column name") else None
+            source_selects = [qselect(column, dialect) for column in source_columns(row.get("source column name"))]
             pretty_expr = expr.replace("\n", "\n    ")
-            select_lines = [f"    {source_select}," if source_select and kind != "Direct" else None, f"    {pretty_expr} AS {qselect(target_column, dialect)}"]
-            select_lines = [line for line in select_lines if line]
+            select_lines = [f"    {column}," for column in source_selects] if kind != "Direct" else []
+            select_lines.append(f"    {pretty_expr} AS {qselect(target_column, dialect)}")
             is_previous_join = re.search(r"check\s+previous\s+month|previous\s+month\s+data", str(row.get("transformation rule") or ""), re.I) and re.search(r"sub_subscription_cd_prev\s*=\s*prev\.sub_subscription_cd", str(row.get("transformation rule") or ""), re.I)
             if is_previous_join:
                 from_clause = previous_month_from_clause(row, dialect)
@@ -804,7 +861,7 @@ def generate_row_queries(sheets, dialect="bigquery"):
             ])
             validation_errors = validate_sql(sql, row, kind)
             status = "READY" if not validation_errors else "REVIEW"
-            sql = sql.replace(f"Status: {'READY' if not validation_errors else 'REVIEW'}", f"Status: {status}")
+            sql = re.sub(r"Status:\s+(?:READY|REVIEW)", f"Status: {status}", sql, count=1)
             output.append({"id": row_number, "sheet": sheet["name"], "source_table": source_table,
                            "source_column": str(row.get("source column name") or ""),
                            "target_table": target_table, "target_column": target_column,
