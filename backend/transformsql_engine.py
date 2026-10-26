@@ -141,6 +141,7 @@ def public_settings():
     return {
         "project": resolve_bigquery_project() or "",
         "location": settings.location or "US",
+        "gcs_results_bucket": os.getenv("GCS_RESULTS_BUCKET", ""),
         "auth_source": bigquery_auth_source(),
         "environment_managed": not bool(credential_path),
         "max_rows": settings.max_rows,
