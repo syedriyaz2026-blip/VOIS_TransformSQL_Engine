@@ -17,7 +17,7 @@ python transformsql_engine.py input.xlsx --dialect bigquery --output generated.s
 
 The API result includes grouped `queries` and `row_queries`. Each row query includes source and target metadata, transformation type, original rule, generated expression, `READY`/`REVIEW` status, and executable SQL text.
 
-The scanner supports both the canonical mapping headers (`Source Table Name`, `Target Column Name`, and related fields) and the contract workbook layout used by `GR_CONTRACT_IBRO_STM_V0.7_5653.xlsx`: `SOURCE TABLE`, `SOURCE COLUMN`, duplicated `DATA TYPE` columns, `TARGET TABLE`, `TARGET COLUMN`, `TRANSFORMATION LOGIC`, and `Nature (GroupBy/ Aggregate over Dim)`. The duplicate data-type columns are resolved by position, and blank source-table cells fall back to the row's target table when the mapping layout requires it.
+The scanner supports both the canonical mapping headers (`Source Table Name`, `Target Column Name`, and related fields) and the contract workbook layout used by `GR_CONTRACT_IBRO_STM_V0.7_5653.xlsx`: `SOURCE TABLE`, `SOURCE COLUMN`, duplicated `DATA TYPE` columns, `TARGET TABLE`, `TARGET COLUMN`, `TRANSFORMATION LOGIC`, and `Nature (GroupBy/ Aggregate over Dim)`. Header matching is case-, whitespace-, punctuation-, line-break-, and column-order-independent. The duplicate data-type columns are resolved by position, and blank source-table cells fall back to the row's target table when the mapping layout requires it.
 
 The default dialect is BigQuery Standard SQL. Use `--dialect bigquery` explicitly in automated jobs.
 
