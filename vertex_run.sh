@@ -111,30 +111,30 @@ else
 fi
 
 if [[ "$START_APP" == "1" ]]; then
+  pkill -f "transformsql_engine.py --serve --port 8080" >/dev/null 2>&1 || true
   pkill -f "transformsql_engine.py --serve --port 8081" >/dev/null 2>&1 || true
   pkill -f "http.server 8080 --directory frontend" >/dev/null 2>&1 || true
-  nohup python3 backend/transformsql_engine.py --serve --port 8081 >"$BACKEND_LOG" 2>&1 &
-  nohup python3 -m http.server 8080 --directory frontend >"$FRONTEND_LOG" 2>&1 &
+  nohup python3 backend/transformsql_engine.py --serve --port 8080 >"$BACKEND_LOG" 2>&1 &
   sleep 3
-  if curl -fsS http://localhost:8081/healthz >/tmp/vois_health.json; then
-    pass "Backend health" "Backend is listening on port 8081."
+  if curl -fsS http://localhost:8080/healthz >/tmp/vois_health.json; then
+    pass "Backend health" "Backend and frontend origin is listening on port 8080."
   else
     fail "Backend health" "Backend health check failed. See backend.log."
   fi
   if curl -fsS http://localhost:8080 >/dev/null; then
-    pass "Frontend health" "Frontend is listening on port 8080."
+    pass "Frontend health" "Frontend is served by the backend on port 8080."
   else
     fail "Frontend health" "Frontend health check failed. See frontend.log."
   fi
 fi
 
 if [[ "$TEST_BIGQUERY" == "1" ]]; then
-  if curl -fsS http://localhost:8081/readyz >/tmp/vois_ready.json; then
+  if curl -fsS http://localhost:8080/readyz >/tmp/vois_ready.json; then
     pass "BigQuery runtime" "Vertex/Google ADC readiness check passed."
   else
     fail "BigQuery runtime" "BigQuery runtime is not ready. Run gcloud auth application-default login and verify IAM/table access."
   fi
-  if curl -fsS -X POST http://localhost:8081/api/test-bigquery >/tmp/vois_bigquery_test.json; then
+  if curl -fsS -X POST http://localhost:8080/api/test-bigquery >/tmp/vois_bigquery_test.json; then
     pass "BigQuery connection" "BigQuery dry-run connection test passed."
   else
     fail "BigQuery connection" "BigQuery dry-run connection test failed. See /tmp/vois_bigquery_test.json and backend.log."
@@ -190,7 +190,7 @@ fi
 
 echo "Report: $REPORT_FILE"
 echo "Web preview: http://localhost:8080"
-echo "Backend API: http://localhost:8081"
+echo "Backend API: http://localhost:8080"
 echo "Failures: $FAILURES | Warnings: $WARNINGS"
 echo "---------------- VOIS RUN REPORT ----------------"
 cat "$REPORT_FILE"

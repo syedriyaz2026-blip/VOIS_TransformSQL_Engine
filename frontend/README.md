@@ -2,14 +2,14 @@
 
 Static browser UI. It supports login, workbook upload, sheet discovery, SQL preview, direct/derived filtering, row approval, BigQuery execution, private target comparison, result/deviation display, copy, and downloads.
 
-Serve this folder with any static server. Set `window.TRANSFORMSQL_API_BASE` when the backend is hosted separately.
+The standard runner serves this folder from the backend on the same origin, avoiding Cloud Shell cross-port preview failures. Set `window.TRANSFORMSQL_API_BASE` only when the backend is intentionally hosted separately.
 
 ## Local startup
 
-Start the backend first on port `8081`, then serve this directory:
+Start the combined backend/frontend server on port `8080`:
 
 ```powershell
-python -m http.server 8080
+python ..\backend\transformsql_engine.py --serve --port 8080
 ```
 
 Open `http://localhost:8080` and use `admin` / `transform123` for the demo login.
@@ -20,4 +20,4 @@ The frontend calls:
 - `POST /api/run-bigquery` to execute the selected generated query.
 - `POST /api/compare-bigquery` to compare the generated output with the target table column.
 
-If the backend is unavailable, the browser uses its local XLSX parser for generation. BigQuery execution and comparison still require the backend and configured Google credentials.
+BigQuery execution and comparison require the same-origin backend and configured Google credentials.

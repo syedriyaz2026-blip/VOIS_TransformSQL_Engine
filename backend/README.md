@@ -6,7 +6,7 @@ Install and run:
 
 ```powershell
 pip install -r requirements.txt
-python transformsql_engine.py --serve --port 8081
+python transformsql_engine.py --serve --port 8080
 ```
 
 Generate a file:

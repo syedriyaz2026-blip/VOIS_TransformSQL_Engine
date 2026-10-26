@@ -23,9 +23,9 @@ if (-not (Test-Path -LiteralPath '.\backend\.env')) {
 
 python -m pip install -r '.\backend\requirements.txt'
 
-# Stop only previous VOIS processes using these exact application ports.
+# Stop only previous VOIS backend processes using the single application port.
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-    Where-Object { $_.CommandLine -match 'transformsql_engine.py --serve --port 8081' } |
+    Where-Object { $_.CommandLine -match 'transformsql_engine.py --serve --port 8080' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
@@ -33,18 +33,13 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 Start-Process -FilePath 'python' `
-    -ArgumentList 'transformsql_engine.py --serve --port 8081' `
+    -ArgumentList 'transformsql_engine.py --serve --port 8080' `
     -WorkingDirectory (Join-Path $ModuleRoot 'backend') `
-    -WindowStyle Hidden
-
-Start-Process -FilePath 'python' `
-    -ArgumentList '-m http.server 8080' `
-    -WorkingDirectory (Join-Path $ModuleRoot 'frontend') `
     -WindowStyle Hidden
 
 Start-Sleep -Seconds 2
 
-Invoke-WebRequest 'http://localhost:8081/healthz' -UseBasicParsing
+Invoke-WebRequest 'http://localhost:8080/healthz' -UseBasicParsing
 Start-Process 'http://localhost:8080'
 
 VERTEX AI / CLOUD SHELL SYNCHRONIZED RUNNER

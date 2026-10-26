@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from functools import partial
 import json
 import os
 import re
@@ -1052,7 +1053,10 @@ class Handler(SimpleHTTPRequestHandler):
             ready = bool(project or settings.env == "local")
             self.send_json({"status": "ready" if ready else "not_ready", "checks": {"configuration": "ok" if ready else "failed", "auth_source": bigquery_auth_source(), "project_discovered": bool(project)}}, 200 if ready else 503)
             return
-        self.send_error(404)
+        # Serve the compiled frontend from the same origin in Cloud Shell.
+        # This avoids cross-port preview failures for /api/config and
+        # /api/test-bigquery.
+        return super().do_GET()
 
     def do_POST(self):
         if self.path == "/api/settings":
@@ -1176,7 +1180,9 @@ def main():
     if args.serve:
         load_env_file()
         print(f"TransformSQL backend listening on http://localhost:{args.port}")
-        ThreadingHTTPServer(("localhost", args.port), Handler).serve_forever()
+        frontend_root = ROOT.parent / "frontend"
+        frontend_handler = partial(Handler, directory=str(frontend_root))
+        ThreadingHTTPServer(("0.0.0.0", args.port), frontend_handler).serve_forever()
     elif args.input:
         result = build_result(Path(args.input), args.dialect)
         Path(args.output).write_text("\n\n-- ==================================================\n\n".join(item["sql"] for item in result["queries"]) + "\n", encoding="utf-8")
