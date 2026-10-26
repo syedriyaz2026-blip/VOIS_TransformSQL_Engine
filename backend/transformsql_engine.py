@@ -119,6 +119,17 @@ def bigquery_auth_source():
     return "service-account environment variable" if os.getenv("GOOGLE_APPLICATION_CREDENTIALS") else "Vertex/Google Application Default Credentials"
 
 
+def bigquery_auth_identity():
+    """Return the non-secret email identity used by Application Default Credentials."""
+    try:
+        import google.auth
+        credentials, _ = google.auth.default()
+        identity = getattr(credentials, "service_account_email", None) or getattr(credentials, "quota_project_id", None)
+        return str(identity or "Runtime-managed ADC identity")
+    except Exception:
+        return "Runtime-managed ADC identity"
+
+
 def save_result_to_gcs(payload, label):
     """Persist a non-secret result artifact in the configured GCS bucket."""
     load_env_file()
@@ -143,7 +154,7 @@ def save_result_to_gcs(payload, label):
 def runtime_error_payload(exc, stage):
     """Return a precise, actionable error for UI and Vertex run reports."""
     message = str(exc)
-    payload = {"error": message, "stage": stage, "error_type": type(exc).__name__}
+    payload = {"error": message, "stage": stage, "error_type": type(exc).__name__, "auth_identity": bigquery_auth_identity()}
     lower = message.lower()
     if "serviceusage.services.use" in lower or "service usage consumer" in lower:
         project = os.getenv("BIGQUERY_PROJECT") or DEFAULT_BIGQUERY_PROJECT
@@ -152,6 +163,7 @@ def runtime_error_payload(exc, stage):
             "required_permission": "serviceusage.services.use",
             "required_role": "roles/serviceusage.serviceUsageConsumer",
             "project": project,
+            "auth_identity": bigquery_auth_identity(),
             "next_step": f"Ask a project administrator to grant roles/serviceusage.serviceUsageConsumer on {project} to the Vertex/Cloud Shell runtime identity, then retry after IAM propagation.",
             "provider_message": message[:1000],
         })
@@ -206,6 +218,7 @@ def public_settings():
         "location": settings.location or "US",
         "gcs_results_bucket": os.getenv("GCS_RESULTS_BUCKET") or DEFAULT_GCS_RESULTS_BUCKET,
         "auth_source": bigquery_auth_source(),
+        "auth_identity": bigquery_auth_identity(),
         "environment_managed": not bool(credential_path),
         "max_rows": settings.max_rows,
         "max_bytes_billed": settings.max_bytes_billed or "",
@@ -1093,7 +1106,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/test-bigquery":
             try:
                 result = dry_run_bigquery("SELECT 1 AS vois_connection_test")
-                self.send_json({"status": "connected", "project": public_settings().get("project", ""), "location": public_settings().get("location", ""), "auth_source": bigquery_auth_source(), "bytes_processed": result.get("bytes_processed", 0)})
+                self.send_json({"status": "connected", "project": public_settings().get("project", ""), "location": public_settings().get("location", ""), "auth_source": bigquery_auth_source(), "auth_identity": bigquery_auth_identity(), "bytes_processed": result.get("bytes_processed", 0)})
             except Exception as exc:
                 response = runtime_error_payload(exc, "bigquery_authentication_or_dry_run")
                 response["status"] = "failed"
