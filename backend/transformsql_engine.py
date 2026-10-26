@@ -864,7 +864,12 @@ def generate_row_queries(sheets, dialect="bigquery"):
             expr = expression(row, dialect)
             status = "READY" if "TODO:" not in expr else "REVIEW"
             row_number += 1
-            source_selects = [qselect(column, dialect) for column in source_columns(row.get("source column name"))]
+            source_names = source_columns(row.get("source column name"))
+            # A derived mapping whose target keeps the source name must not
+            # project both the raw column and the derived expression under the
+            # same BigQuery field name.
+            source_names = [column for column in source_names if column.casefold() != target_column.casefold()]
+            source_selects = [qselect(column, dialect) for column in source_names]
             pretty_expr = expr.replace("\n", "\n    ")
             select_lines = [f"    {column}," for column in source_selects] if kind != "Direct" else []
             source_name = str(row.get("source column name") or "").strip()
