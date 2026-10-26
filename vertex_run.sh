@@ -84,7 +84,12 @@ from pathlib import Path
 sys.path.insert(0, "backend")
 import transformsql_engine as engine
 path = Path(os.environ["INPUT_XLSX"])
-result = engine.build_result(path)
+source_dataset = os.getenv("BIGQUERY_SOURCE_DATASET") or os.getenv("BIGQUERY_DATASET")
+target_dataset = os.getenv("BIGQUERY_TARGET_DATASET") or os.getenv("BIGQUERY_DATASET")
+if not source_dataset or not target_dataset:
+    print("Workbook regression deferred: source/target datasets are entered in the UI.")
+    raise SystemExit(0)
+result = engine.build_result(path, context={"source_project": os.getenv("BIGQUERY_SOURCE_PROJECT", ""), "source_dataset": source_dataset, "target_project": os.getenv("BIGQUERY_TARGET_PROJECT", ""), "target_dataset": target_dataset})
 summary = result["summary"]
 assert summary["row_count"] > 0, "No mapping rows detected"
 print(summary)

@@ -27,18 +27,5 @@ if [[ -z "${INPUT_XLSX:-}" ]]; then
   fi
 fi
 
-if [[ -z "${BIGQUERY_SOURCE_DATASET:-}" ]]; then
-  read -r -p "Source BigQuery dataset: " BIGQUERY_SOURCE_DATASET
-  export BIGQUERY_SOURCE_DATASET
-fi
-if [[ -z "${BIGQUERY_TARGET_DATASET:-}" ]]; then
-  read -r -p "Target BigQuery dataset: " BIGQUERY_TARGET_DATASET
-  export BIGQUERY_TARGET_DATASET
-fi
-if [[ -z "${GCS_RESULTS_BUCKET:-}" ]]; then
-  read -r -p "GCS results bucket (without gs://): " GCS_RESULTS_BUCKET
-  export GCS_RESULTS_BUCKET
-fi
-
 export INPUT_XLSX
 exec bash "$ROOT_DIR/vertex_run.sh"
